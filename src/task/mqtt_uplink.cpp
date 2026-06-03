@@ -60,7 +60,10 @@ static void publish_batch(const uint8_t *batch, size_t pos) {
   }
 }
 
-/** FreeRTOS 任务：按水位切换快慢聚合周期，MQTT 未连接则只排空逻辑在下次循环。 */
+/**
+ * MQTT 上行聚合任务：从共享环形缓冲区取出 CAN 转换后的 AT 行，按高/低水位
+ * 切换聚合周期，MQTT 连接可用时批量发布并累计上行流量统计。
+ */
 void agg_task(void *) {
   ensure_ring();
   PacketRingBuffer &ring = *g_ring;

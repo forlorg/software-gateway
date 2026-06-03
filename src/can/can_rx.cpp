@@ -29,6 +29,10 @@ struct MirrorLine {
 
 QueueHandle_t g_mirror_q{};
 
+/**
+ * USB CDC 镜像发送任务：阻塞等待 CAN 接收任务投递的 AT 行，
+ * 分段写入 USB CDC/Serial，写失败时短暂让出 CPU 后继续发送。
+ */
 void mirror_tx_task(void *) {
   MirrorLine item{};
   for (;;) {
@@ -64,6 +68,10 @@ void mirror_line(const uint8_t *buf, size_t len) {
   }
 }
 
+/**
+ * CAN 接收任务：阻塞接收 TWAI 帧，更新流量/业务统计，识别 product 宣告并刷新
+ * 设备上下文，将 CAN 帧按 AT 协议编码后投递到 USB CDC 镜像队列，时间同步可用时送入 MQTT 上行缓冲。
+ */
 void rx_task(void *) {
   twai_message_t msg{};
   uint8_t line[gateway::at_protocol::kAtLineMaxBytes];

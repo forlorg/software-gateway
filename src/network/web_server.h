@@ -16,7 +16,4 @@ void start();
 /** 每圈调用一次 `handleClient()`（仅用于同步 WebServer）。 */
 void poll();
 
-/** 刷新供 `GET /api/live_state` 返回的全局快照（原 SSE 载荷，改为轮询）。 */
-void sse_tick();
-
 } // namespace gateway::web_server

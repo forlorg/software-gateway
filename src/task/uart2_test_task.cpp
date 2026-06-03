@@ -16,6 +16,10 @@ namespace {
 static constexpr const char kLogTag[] = "UART2_TST";
 static constexpr size_t kRxChunkMax = 256;
 
+/**
+ * UART2 测试任务：初始化 Serial2，循环读取并打印收到的原始字节/ASCII，
+ * 同时按固定周期向 UART2 发送带序号和 tick 的测试字符串。
+ */
 void task_uart2_test(void *) {
   Serial2.begin(kBaud, SERIAL_8N1, kUart2RxPin, kUart2TxPin);
   Serial.printf("[%s] Serial2 %u baud RX=%d TX=%d, task core %d\n", kLogTag,

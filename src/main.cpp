@@ -11,8 +11,8 @@
 #include "task/can_ring_flush_task.h"
 #include "task/heartbeat_led_task.h"
 #include "system/time_sync.h"
-#include "task/web_server_task.h"
-#include "task/wifi_ap_task.h"
+#include "task/http_server_task.h"
+#include "task/network_task.h"
 #include "task/uart2_test_task.h"
 
 #include "network/mqtt_manager.h"
@@ -47,9 +47,9 @@ void setup() {
 
   gateway::mqtt_uplink::begin();
 
-  gateway::wifi_ap_task::start();
+  gateway::network_task::start();
   delay(350);
-  gateway::web_server_task::start();
+  gateway::http_server_task::start();
   gateway::heartbeat_led::start();
 
   gateway::uart2_test_task::start();

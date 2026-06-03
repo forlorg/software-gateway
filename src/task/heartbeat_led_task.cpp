@@ -18,6 +18,10 @@ static constexpr const char kLogTag[] = "HB_LED";
 static constexpr uint32_t kStackBytes = 3072;
 static constexpr BaseType_t kPinnedCore = static_cast<BaseType_t>(1);
 
+/**
+ * 心跳 LED 任务：初始化板载 LED GPIO，并按配置半周期持续翻转电平，
+ * 用于现场观察固件调度是否仍在运行。
+ */
 void task_heartbeat_led(void *) {
   const int pin = kHeartbeatLedPin;
   Serial.printf("[%s] task on core %d\n", kLogTag, xPortGetCoreID());
