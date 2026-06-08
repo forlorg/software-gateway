@@ -1,0 +1,2035 @@
+# ────────────────────────────────────────────────────────
+# 此文件从 12_can_protocol_frames.yaml 拆分而来
+# 包含 PGN 范围: other PGNs (0x01xx, 0xFxxx)
+#
+# 完整协议由以下文件共同组成:
+#   - 12_can_protocol_frames_15xx.yaml  (0x15xx)
+#   - 12_can_protocol_frames_17xx.yaml  (0x17xx)
+#   - 12_can_protocol_frames_18xx.yaml  (0x18xx)
+#   - 12_can_protocol_frames_other.yaml  (other PGNs (0x01xx, 0xFxxx)) ← 当前文件
+#
+# 解析时应将所有文件合并或分别加载。
+# 公共 metadata 定义与 12_can_protocol_frames.yaml（原文件）一致。
+# ────────────────────────────────────────────────────────
+
+# TCU CAN protocol, indexed by PGN. Byte numbering uses data0..data7; bit_start=0 means LSB.
+metadata:
+  schema_version: 12_can_protocol_frames
+  description: >
+    TCU CAN 通讯协议帧定义文件。以 PGN（Parameter Group Number）为索引，
+    描述每个 CAN 帧内各 element 的字节/位布局、物理量纲和枚举引用。
+    解析程序应配合 10_can_protocol_intro.yaml 的解析流程，并联动
+    11_can_protocol_enums.yaml 完成枚举值翻译。
+
+  # ── CAN ID 格式 ──────────────────────────────────────
+  can_id_format:
+    type: "29-bit extended CAN ID (SAE J1939 兼容)"
+    display: "8 位十六进制字符串，如 0x06151E03"
+    fields:
+      priority_byte:
+        bits: "ID[28:24]"
+        description: >
+          最高字节，包含 J1939 优先级 Priority(3 bits) + 保留位 R(1 bit) +
+          数据页 DP(1 bit)。在 32-bit 表示中为 (can_id >> 24) & 0xFF。
+        example: "0x06"
+      pgn:
+        bits: "ID[23:8]"
+        description: >
+          参数组编号 PGN，由 PF（PDU Format, ID[23:16]）和 PS（PDU Specific,
+          ID[15:8]）组成。PF < 240 时 PS 为目标地址 DA；PF >= 240 时 PS 为
+          组扩展 GE。提取公式: pgn = (can_id >> 8) & 0xFFFF。
+        example: "0x151E"
+      source_address:
+        bits: "ID[7:0]"
+        description: >
+          J1939 源地址 SA，在本协议中用于区分通信方向。
+          TCU → 上位机/网关: 0x03
+          上位机/网关 → TCU: 0x60
+        example: "0x03 (TCU 发出)"
+
+  # ── 帧键索引规则 ──────────────────────────────────────
+  index_rule:
+    method: "帧键 = PGN 的 4 位十六进制字符串"
+    format: "0xGGGG"
+    description: >
+      帧键仅使用 PGN，不包含优先级字节和源地址。
+      完整 CAN ID 0x06151E03 在本文件中的帧键为 0x151E。
+      priority 和 source_address 信息分别存储在帧对象的 priority 字段和
+      CAN ID 的 SA 字段中，不参与帧键匹配。
+    derivation: |
+      pgn = (can_id >> 8) & 0xFFFF
+      frame_key = f"0x{pgn:04X}"
+
+  # ── 优先级规则 ───────────────────────────────────────
+  priority_rule:
+    description: >
+      每个帧的 priority 字段来自两路来源：Word 协议文档和软件 JSON 配置。
+      当同一 PGN 在两路来源中均存在且 priority 不一致时，以 Word 文档的
+      priority 为准。source_authority 字段记录了当前帧定义的来源。
+    sources:
+      word: "Word 协议文档，优先级较高"
+      software_json: "软件 JSON 配置"
+
+  # ── CAN 通道分配规则 ─────────────────────────────────
+  channel_rule:
+    description: >
+      根据 PGN 范围自动确定 CAN 物理通道。
+      PGN 在 0x1700 ~ 0x18FF 范围内的帧走 CAN1，
+      其余 PGN 的帧走 CAN0。
+      每个帧对象内的 channel 字段必须与此规则一致。
+    mapping:
+      - pgn_range: "0x1700 ~ 0x18FF"
+        channel: CAN1
+      - pgn_range: "其余"
+        channel: CAN0
+    parser_requirement: >
+      解析程序应将实际接收通道与 frame.channel 比对，
+      不一致时记录 channel_mismatch 诊断信息。
+
+  # ── Payload 字节/位编号 ──────────────────────────────
+  byte_numbering:
+    description: "CAN 数据字节编号为 data0 ~ data7，共 8 字节"
+    byte_start: "0 表示 data0，7 表示 data7"
+    note: "Word 文档中的 Byte 1 对应 byte_start=0，切勿直接使用 Word 编号"
+
+  bit_numbering:
+    description: "每个字节内部 bit_start 从 0（LSB 最低位）到 7（MSB 最高位）"
+    rule: "bit_start=0 表示该字节的最低位"
+    note: "Word 文档中的 bit 1 为 MSB，切勿直接使用 Word 编号"
+
+  multi_byte_order:
+    default: little_endian
+    description: >
+      对于 byte_length > 1 的连续多字节 element，默认按 little-endian 组合。
+      低地址字节为数值的低 8 位。
+      例如 byte_start=2, byte_length=2 → raw = data2 | (data3 << 8)。
+      若 element 显式声明 byte_order 字段，应优先使用其值覆盖本默认值。
+
+  # ── 枚举引用规则 ─────────────────────────────────────
+  enum_id_rule:
+    description: >
+      element.enum_id 引用 11_can_protocol_enums.yaml 中的 enums[].enum_id。
+      enum_id = 0 表示该 element 无枚举引用，仅输出 raw 和 physical_value。
+      enum_id ≠ 0 时必须查找对应的枚举定义，生成 enum_text 并同时保留 raw。
+
+  # ── 协议范围 ─────────────────────────────────────────
+  scope:
+    frame_count: 200
+    pgn_range: "0x0100 ~ 0xFEFF"
+    channel_distribution:
+      CAN0: 103
+      CAN1: 97
+    bitrate: "250 kbps (SAE J1939 通用速率)"
+frames:
+  '0x0100':
+    priority: '0x03'
+    source_authority: word
+    channel: CAN0
+    interval: 50
+    elements:
+    - name: 行驶环境描述
+      position_raw: Byte 1 bit 8~7
+      byte_start: 0
+      byte_length: 1
+      bit_start: 6
+      bit_length: 2
+      data_range: 00 ~ 11
+      ref_range: 00 ~ 11
+      scaling: null
+      offset: 0
+      unit: ''
+      remark: 00=自由环境, 01=田间, 10=道路, 11=未定义
+      min: 0
+      max: 3
+      enum_id: 20
+      r/w: w
+    - name: 断开动力请求
+      position_raw: Byte 1 bit 6~5
+      byte_start: 0
+      byte_length: 1
+      bit_start: 4
+      bit_length: 2
+      data_range: 00 ~ 11
+      ref_range: 00 ~ 11
+      scaling: null
+      offset: 0
+      unit: ''
+      remark: 00=允许动力系统工作，01=关闭动力传动系统，10=未定义，11=无动作
+      min: 0
+      max: 3
+      position_note: byte filled from previous Byte position in Word table
+      enum_id: 21
+      r/w: w
+    - name: 未定义
+      position_raw: Byte 1 bit 4~3
+      byte_start: 0
+      byte_length: 1
+      bit_start: 2
+      bit_length: 2
+      data_range: 00 ~ 11
+      ref_range: 00 ~ 11
+      scaling: null
+      offset: 0
+      unit: ''
+      remark: --
+      min: 0
+      max: 3
+      position_note: byte filled from previous Byte position in Word table
+      enum_id: 0
+      r/w: ''
+    - name: 变速箱控制请求
+      position_raw: Byte 1 bit 2~1
+      byte_start: 0
+      byte_length: 1
+      bit_start: 0
+      bit_length: 2
+      data_range: 00 ~ 11
+      ref_range: 00 ~ 11
+      scaling: null
+      offset: 0
+      unit: ''
+      remark: 00=允许变速箱换挡，01=禁止变速箱换挡，10=变速箱由外部控制接管，11=无动作
+      min: 0
+      max: 3
+      position_note: byte filled from previous Byte position in Word table
+      enum_id: 22
+      r/w: w
+    - name: 离合器打滑请求
+      position_raw: Byte 2
+      byte_start: 1
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: 0到100%
+      ref_range: 0到100%
+      scaling: 0.4
+      offset: 0
+      unit: '%'
+      remark: 0.4%/bit
+      min: 0
+      max: 100
+      enum_id: 0
+      r/w: w
+      precision: 1
+    - name: 换挡请求
+      position_raw: Byte 3
+      byte_start: 2
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: -125到125
+      ref_range: -125到125
+      scaling: 1
+      offset: -125
+      unit: g
+      remark: 1gear/bit，FB=STOP
+      min: -125
+      max: 125
+      enum_id: 42
+      r/w: w
+    - name: 关闭差速锁请求
+      position_raw: Byte 4
+      byte_start: 3
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: --
+      ref_range: --
+      scaling: null
+      offset: null
+      unit: ''
+      remark: --
+      enum_id: 23
+      r/w: w
+    - name: 未定义
+      position_raw: Byte 5~8
+      byte_start: 4
+      byte_length: 4
+      bit_start: 0
+      bit_length: 32
+      data_range: --
+      ref_range: --
+      scaling: null
+      offset: null
+      unit: ''
+      remark: --
+      enum_id: 0
+      r/w: ''
+  '0xF002':
+    priority: '0x0C'
+    source_authority: word
+    channel: CAN0
+    interval: 10
+    elements:
+    - name: ERC1状态
+      position_raw: Byte 1
+      byte_start: 0
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: --
+      ref_range: --
+      scaling: null
+      offset: null
+      unit: ''
+      remark: --
+      enum_id: 0
+      r/w: ''
+    - name: 输出轴速度
+      position_raw: Byte 2~3
+      byte_start: 1
+      byte_length: 2
+      bit_start: 0
+      bit_length: 16
+      data_range: 0到8031rpm
+      ref_range: 0到8031rpm
+      scaling: 0.125
+      offset: 0
+      unit: rpm
+      remark: 0.125rpm/bit
+      min: 0
+      max: 8031
+      enum_id: 0
+      r/w: ''
+    - name: 离合器打滑率
+      position_raw: Byte 4
+      byte_start: 3
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: 0到100%
+      ref_range: 0到100%
+      scaling: 0.4
+      offset: 0
+      unit: '%'
+      remark: 0.4%/bit
+      min: 0
+      max: 100
+      enum_id: 0
+      r/w: ''
+    - name: ERC1命令
+      position_raw: Byte 5
+      byte_start: 4
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: ''
+      ref_range: ''
+      scaling: null
+      offset: null
+      unit: ''
+      remark: ''
+      enum_id: 0
+      r/w: ''
+    - name: 输入轴速度
+      position_raw: Byte 6~7
+      byte_start: 5
+      byte_length: 2
+      bit_start: 0
+      bit_length: 16
+      data_range: 0到8031rpm
+      ref_range: 0到8031rpm
+      scaling: 0.125
+      offset: 0
+      unit: rpm
+      remark: 0.125rpm/bit
+      min: 0
+      max: 8031
+      enum_id: 0
+      r/w: ''
+    - name: TCU源地址
+      position_raw: Byte 8
+      byte_start: 7
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: 0到253
+      ref_range: 0到253
+      scaling: null
+      offset: 0
+      unit: ''
+      remark: 1源地址/bit，0x03
+      min: 0
+      max: 253
+      enum_id: 0
+      r/w: ''
+  '0xF003':
+    priority: '0x0C'
+    source_authority: software_json
+    channel: CAN0
+    interval: null
+    elements:
+    - name: 油门踏板位置1
+      position_raw: Byte 2
+      byte_start: 1
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0~100
+      ref_range: 0~100
+      scaling: 0.4
+      offset: 0
+      unit: '%'
+      remark: TODO
+      min: 0
+      max: 100
+      precision: 1
+      r/w: r
+    - name: 发动机负荷百分比
+      position_raw: Byte 3
+      byte_start: 2
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0~250
+      ref_range: 0~250
+      scaling: 1
+      offset: 0
+      unit: '%'
+      remark: TODO
+      min: 0
+      max: 250
+      r/w: r
+  '0xF004':
+    priority: '0x0C'
+    source_authority: software_json
+    channel: CAN0
+    interval: null
+    elements:
+    - name: 发动机扭矩模式
+      position_raw: Byte 1 bit 4~1
+      byte_start: 0
+      byte_length: 1
+      bit_start: 0
+      bit_length: 4
+      enum_id: 29
+      data_range: 0~15
+      ref_range: 0~15
+      scaling: 1
+      offset: 0
+      unit: ''
+      remark: TODO
+      min: 0
+      max: 15
+      r/w: r
+    - name: 驾驶员意图扭矩百分比
+      position_raw: Byte 2
+      byte_start: 1
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: -125~125
+      ref_range: -125~125
+      scaling: 1
+      offset: -125
+      unit: '%'
+      remark: TODO
+      min: -125
+      max: 125
+      r/w: r
+    - name: 实际扭矩百分比
+      position_raw: Byte 3
+      byte_start: 2
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: -125~125
+      ref_range: -125~125
+      scaling: 1
+      offset: -125
+      unit: '%'
+      remark: TODO
+      min: -125
+      max: 125
+      r/w: r
+    - name: 发动机转速
+      position_raw: Byte 4~5
+      byte_start: 3
+      byte_length: 2
+      bit_start: 0
+      bit_length: 16
+      enum_id: 0
+      data_range: 0~8031.875
+      ref_range: 0~8031.875
+      scaling: 0.125
+      offset: 0
+      unit: rpm
+      remark: TODO
+      min: 0
+      max: 8031.875
+      precision: 3
+      r/w: r
+  '0xF005':
+    priority: '0x18'
+    source_authority: word
+    channel: CAN0
+    interval: 100
+    elements:
+    - name: 未定义
+      position_raw: Byte 1
+      byte_start: 0
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: --
+      ref_range: --
+      scaling: null
+      offset: null
+      unit: ''
+      remark: --
+      enum_id: 0
+      r/w: ''
+    - name: 传动比
+      position_raw: Byte 2~3
+      byte_start: 1
+      byte_length: 2
+      bit_start: 0
+      bit_length: 16
+      data_range: 0到64.255
+      ref_range: 0到64.255
+      scaling: 0.001
+      offset: 0
+      unit: ''
+      remark: 0.001/bit
+      min: 0
+      max: 64.255
+      enum_id: 0
+      r/w: r
+      precision: 3
+    - name: 未定义
+      position_raw: Byte 4
+      byte_start: 3
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: --
+      ref_range: --
+      scaling: null
+      offset: null
+      unit: ''
+      remark: --
+      enum_id: 0
+      r/w: ''
+    - name: 请求的挡位
+      position_raw: Byte 5
+      byte_start: 4
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: 0x00-0xFF
+      ref_range: 0x00-0xFF
+      scaling: null
+      offset: 0
+      unit: ''
+      remark: 偏置-125后，-125~-65=停车挡，-64~-1=倒挡，0=空挡，1~32=低挡，33~64=高挡
+      enum_id: 171335
+      r/w: w
+      min: -125
+      max: 125
+    - name: 请求的挡位
+      position_raw: Byte 6
+      byte_start: 5
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: ''
+      ref_range: ''
+      scaling: null
+      offset: null
+      unit: ''
+      remark: 暂时不用
+      enum_id: 42
+      r/w: ''
+    - name: 当前的挡位
+      position_raw: Byte 7
+      byte_start: 6
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: 0x00-0xFF
+      ref_range: 0x00-0xFF
+      scaling: null
+      offset: 0
+      unit: ''
+      remark: 偏置125后，-125~-65=停车挡，-64~-1=倒挡，0=空挡，1~32=低挡，33~64=高挡
+      enum_id: 171335
+      r/w: r
+      min: -125
+      max: 125
+    - name: 当前的挡位
+      position_raw: Byte 8
+      byte_start: 7
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: --
+      ref_range: --
+      scaling: null
+      offset: null
+      unit: ''
+      remark: 暂时不用
+      enum_id: 42
+      r/w: ''
+  '0xF00A':
+    priority: '0x0C'
+    source_authority: software_json
+    channel: CAN0
+    interval: null
+    elements:
+    - name: 进气流量
+      position_raw: Byte 3~4
+      byte_start: 2
+      byte_length: 2
+      bit_start: 0
+      bit_length: 16
+      enum_id: 0
+      data_range: 0~3212.75
+      ref_range: 0~3212.75
+      scaling: 0.05
+      offset: 0
+      unit: kg/h
+      remark: TODO
+      min: 0
+      max: 3212.75
+      precision: 2
+      r/w: r
+  '0xF00F':
+    priority: '0x18'
+    source_authority: software_json
+    channel: CAN0
+    interval: null
+    elements:
+    - name: NOx浓度SCR下游
+      position_raw: Byte 1~2
+      byte_start: 0
+      byte_length: 2
+      bit_start: 0
+      bit_length: 16
+      enum_id: 0
+      data_range: 0~3012.75
+      ref_range: 0~3012.75
+      scaling: 0.05
+      offset: -200
+      unit: ppm
+      remark: TODO
+      min: -200
+      max: 3012.75
+      precision: 2
+      r/w: r
+  '0xFBCB':
+    priority: '0x18'
+    source_authority: software_json
+    channel: CAN0
+    interval: null
+    elements:
+    - name: 非强制仪表PCD激活后事件总累计时间
+      position_raw: Byte 1~4
+      byte_start: 0
+      byte_length: 4
+      bit_start: 0
+      bit_length: 32
+      enum_id: 0
+      data_range: 0~4211081215
+      ref_range: 0~4211081215
+      scaling: 1
+      offset: 0
+      unit: s
+      remark: TODO
+      min: 0
+      max: 4211081215
+      r/w: r
+    - name: 非强制仪表PCD激活后事件总次数
+      position_raw: Byte 5~8
+      byte_start: 4
+      byte_length: 4
+      bit_start: 0
+      bit_length: 32
+      enum_id: 0
+      data_range: 0~4211081215
+      ref_range: 0~4211081215
+      scaling: 1
+      offset: 0
+      unit: count
+      remark: TODO
+      min: 0
+      max: 4211081215
+      r/w: r
+  '0xFC2A':
+    priority: '0x18'
+    source_authority: software_json
+    channel: CAN0
+    interval: null
+    elements:
+    - name: NCD/PCD驾驶员限制系统激活1级限扭倒计时
+      position_raw: Byte 2~3
+      byte_start: 1
+      byte_length: 2
+      bit_start: 0
+      bit_length: 16
+      enum_id: 0
+      data_range: 0~64255
+      ref_range: 0~64255
+      scaling: 1
+      offset: 0
+      unit: min
+      remark: TODO
+      min: 0
+      max: 64255
+      r/w: r
+    - name: NCD/PCD驾驶员限制系统激活最终诱导前倒计时
+      position_raw: Byte 7~8
+      byte_start: 6
+      byte_length: 2
+      bit_start: 0
+      bit_length: 16
+      enum_id: 0
+      data_range: 0~64255
+      ref_range: 0~64255
+      scaling: 1
+      offset: 0
+      unit: min
+      remark: TODO
+      min: 0
+      max: 64255
+      r/w: r
+  '0xFD07':
+    priority: '0x18'
+    source_authority: software_json
+    channel: CAN0
+    interval: null
+    elements:
+    - name: 仪表机油压力报警灯
+      position_raw: Byte 2 bit 6~5
+      byte_start: 1
+      byte_length: 1
+      bit_start: 4
+      bit_length: 2
+      enum_id: 34
+      data_range: 0~3
+      ref_range: 0~3
+      scaling: 1
+      offset: 0
+      unit: ''
+      remark: TODO
+      r/w: r
+  '0xFD09':
+    priority: '0x18'
+    source_authority: software_json
+    channel: CAN0
+    interval: null
+    elements:
+    - name: 发动机总油耗
+      position_raw: Byte 5~8
+      byte_start: 4
+      byte_length: 4
+      bit_start: 0
+      bit_length: 32
+      enum_id: 0
+      data_range: 0~4211081.215
+      ref_range: 0~4211081.215
+      scaling: 0.001
+      offset: 0
+      unit: I
+      remark: TODO
+      min: 0
+      max: 4211081.215
+      precision: 3
+      r/w: r
+  '0xFD20':
+    priority: '0x18'
+    source_authority: software_json
+    channel: CAN0
+    interval: null
+    elements:
+    - name: T4，DOC入口温度
+      position_raw: Byte 1~2
+      byte_start: 0
+      byte_length: 2
+      bit_start: 0
+      bit_length: 16
+      enum_id: 0
+      data_range: -273~1734.96875
+      ref_range: -273~1734.96875
+      scaling: 0.03125
+      offset: -273
+      unit: °C
+      remark: TODO
+      min: -273
+      max: 1734.96875
+      precision: 5
+      r/w: r
+    - name: T5，DPF入口温度
+      position_raw: Byte 3~4
+      byte_start: 2
+      byte_length: 2
+      bit_start: 0
+      bit_length: 16
+      enum_id: 0
+      data_range: -273~1734.96875
+      ref_range: -273~1734.96875
+      scaling: 0.03125
+      offset: -273
+      unit: °C
+      remark: TODO
+      min: -273
+      max: 1734.96875
+      precision: 5
+      r/w: r
+  '0xFD3E':
+    priority: '0x14'
+    source_authority: software_json
+    channel: CAN0
+    interval: null
+    elements:
+    - name: T6SCR入口温度
+      position_raw: Byte 1~2
+      byte_start: 0
+      byte_length: 2
+      bit_start: 0
+      bit_length: 16
+      enum_id: 0
+      data_range: -273~1734.96875
+      ref_range: -273~1734.96875
+      scaling: 0.03125
+      offset: -273
+      unit: °C
+      remark: TODO
+      min: -273
+      max: 1734.96875
+      precision: 5
+      r/w: r
+    - name: T7SCR出口温度
+      position_raw: Byte 4~5
+      byte_start: 3
+      byte_length: 2
+      bit_start: 0
+      bit_length: 16
+      enum_id: 0
+      data_range: -273~1734.96875
+      ref_range: -273~1734.96875
+      scaling: 0.03125
+      offset: -273
+      unit: °C
+      remark: TODO
+      min: -273
+      max: 1734.96875
+      precision: 5
+      r/w: r
+  '0xFD7C':
+    priority: '0x18'
+    source_authority: software_json
+    channel: CAN0
+    interval: null
+    elements:
+    - name: 仪表DPF再生提示灯
+      position_raw: Byte 1 bit 3~1
+      byte_start: 0
+      byte_length: 1
+      bit_start: 0
+      bit_length: 3
+      enum_id: 36
+      data_range: ''
+      ref_range: ''
+      scaling: 1
+      offset: 0
+      unit: ''
+      remark: TODO
+      r/w: r
+    - name: 仪表高排温指示灯
+      position_raw: Byte 7 bit 5~3
+      byte_start: 6
+      byte_length: 1
+      bit_start: 2
+      bit_length: 3
+      enum_id: 37
+      data_range: 0~7
+      ref_range: 0~7
+      scaling: 1
+      offset: 0
+      unit: ''
+      remark: TODO
+      r/w: r
+    - name: 仪表DPF再生状态灯
+      position_raw: Byte 2 bit 4~3
+      byte_start: 1
+      byte_length: 1
+      bit_start: 2
+      bit_length: 2
+      enum_id: 34
+      data_range: 0~3
+      ref_range: 0~3
+      scaling: 1
+      offset: 0
+      unit: ''
+      remark: TODO
+      r/w: r
+    - name: 仪表DPF再生禁止灯
+      position_raw: Byte 3 bit 4~3
+      byte_start: 2
+      byte_length: 1
+      bit_start: 2
+      bit_length: 2
+      enum_id: 34
+      data_range: 0~3
+      ref_range: 0~3
+      scaling: 1
+      offset: 0
+      unit: ''
+      remark: TODO
+      r/w: r
+  '0xFD94':
+    priority: '0x0C'
+    source_authority: software_json
+    channel: CAN0
+    interval: null
+    elements:
+    - name: EGR实际开度
+      position_raw: Byte 1~2
+      byte_start: 0
+      byte_length: 2
+      bit_start: 0
+      bit_length: 16
+      enum_id: 0
+      data_range: 0~160.6375
+      ref_range: 0~160.6375
+      scaling: 0.0025
+      offset: 0
+      unit: '%'
+      remark: TODO
+      min: 0
+      max: 160.6375
+      precision: 4
+      r/w: r
+  '0xFD9B':
+    priority: '0x18'
+    source_authority: software_json
+    channel: CAN0
+    interval: null
+    elements:
+    - name: 尿素液温度
+      position_raw: Byte 1
+      byte_start: 0
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0~62.5
+      ref_range: 0~62.5
+      scaling: 0.25
+      offset: 0
+      unit: '%'
+      remark: TODO
+      min: 0
+      max: 62.5
+      precision: 2
+      r/w: r
+    - name: 尿素浓度/尿素质量
+      position_raw: Byte 2
+      byte_start: 1
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0~62.5
+      ref_range: 0~62.5
+      scaling: 0.25
+      offset: 0
+      unit: '%'
+      remark: TODO
+      min: 0
+      max: 62.5
+      precision: 2
+      r/w: r
+  '0xFDB2':
+    priority: '0x18'
+    source_authority: software_json
+    channel: CAN0
+    interval: null
+    elements:
+    - name: DPF 压差
+      position_raw: Byte 5~6
+      byte_start: 4
+      byte_length: 2
+      bit_start: 0
+      bit_length: 16
+      enum_id: 0
+      data_range: 0~6425.5
+      ref_range: 0~6425.5
+      scaling: 0.1
+      offset: 0
+      unit: kPa
+      remark: TODO
+      min: 0
+      max: 6425.5
+      precision: 1
+      r/w: r
+  '0xFDD5':
+    priority: '0x18'
+    source_authority: software_json
+    channel: CAN0
+    interval: null
+    elements:
+    - name: EGR需求开度
+      position_raw: Byte 5~6
+      byte_start: 4
+      byte_length: 2
+      bit_start: 0
+      bit_length: 16
+      enum_id: 0
+      data_range: 0~160.6375
+      ref_range: 0~160.6375
+      scaling: 0.0025
+      offset: 0
+      unit: '%'
+      remark: TODO
+      min: 0
+      max: 160.6375
+      precision: 4
+      r/w: r
+  '0xFE56':
+    priority: '0x18'
+    source_authority: software_json
+    channel: CAN0
+    interval: null
+    elements:
+    - name: 尿素液位百分比
+      position_raw: Byte 1
+      byte_start: 0
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0~100
+      ref_range: 0~100
+      scaling: 0.4
+      offset: 0
+      unit: '%'
+      remark: TODO
+      min: 0
+      max: 100
+      precision: 1
+      r/w: r
+    - name: 尿素温度
+      position_raw: Byte 2
+      byte_start: 1
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: -40~210
+      ref_range: -40~210
+      scaling: 1
+      offset: -40
+      unit: °C
+      remark: TODO
+      min: -40
+      max: 210
+      r/w: r
+    - name: 尿素液位高度
+      position_raw: Byte 3~4
+      byte_start: 2
+      byte_length: 2
+      bit_start: 0
+      bit_length: 16
+      enum_id: 0
+      data_range: 0~6425.5
+      ref_range: 0~6425.5
+      scaling: 0.1
+      offset: 0
+      unit: mm
+      remark: TODO
+      min: 0
+      max: 6425.5
+      precision: 1
+      r/w: r
+  '0xFE6C':
+    priority: '0x0C'
+    source_authority: word
+    channel: CAN0
+    interval: 50
+    elements:
+    - name: TCO1
+      position_raw: Byte 1
+      byte_start: 0
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: --
+      ref_range: --
+      scaling: null
+      offset: null
+      unit: ''
+      remark: --
+      enum_id: 0
+      r/w: r
+      min: 0
+      max: 255
+    - name: 转速计 超速
+      position_raw: Byte 2 bit 8~7
+      byte_start: 1
+      byte_length: 1
+      bit_start: 6
+      bit_length: 2
+      data_range: 00 ~ 01
+      ref_range: 00 ~ 01
+      scaling: null
+      offset: 0
+      unit: ''
+      remark: 00=正常，01=超速
+      min: 0
+      max: 1
+      enum_id: 41
+      r/w: r
+    - name: 未定义
+      position_raw: Byte 2 bit 6~1
+      byte_start: 1
+      byte_length: 1
+      bit_start: 0
+      bit_length: 6
+      data_range: --
+      ref_range: --
+      scaling: null
+      offset: null
+      unit: ''
+      remark: --
+      position_note: byte filled from previous Byte position in Word table
+      enum_id: 0
+      r/w: ''
+    - name: TCO3
+      position_raw: Byte 3
+      byte_start: 2
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: --
+      ref_range: --
+      scaling: null
+      offset: null
+      unit: ''
+      remark: --
+      enum_id: 0
+      r/w: r
+      min: 0
+      max: 255
+    - name: TCO4
+      position_raw: Byte 4
+      byte_start: 3
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: --
+      ref_range: --
+      scaling: null
+      offset: null
+      unit: ''
+      remark: --
+      enum_id: 0
+      r/w: r
+      min: 0
+      max: 255
+    - name: 转速计处轴速度
+      position_raw: Byte 5~6
+      byte_start: 4
+      byte_length: 2
+      bit_start: 0
+      bit_length: 16
+      data_range: 0到8031rpm
+      ref_range: 0到8031rpm
+      scaling: 0.125
+      offset: 0
+      unit: rpm
+      remark: 0.125rpm/bit
+      min: 0
+      max: 8031
+      enum_id: 0
+      r/w: r
+      precision: 3
+    - name: 转速计车速
+      position_raw: Byte 7~8
+      byte_start: 6
+      byte_length: 2
+      bit_start: 0
+      bit_length: 16
+      data_range: 0到250Km/h
+      ref_range: 0到250Km/h
+      scaling: null
+      offset: 0
+      unit: Km/h
+      remark: 1/256（Km/h）/bit
+      min: 0
+      max: 250
+      enum_id: 0
+      r/w: r
+      precision: 8
+  '0xFECA':
+    priority: '0x18'
+    source_authority: software_json
+    channel: CAN0
+    interval: null
+    elements:
+    - name: 仪表发动机故障灯
+      position_raw: Byte 1 bit 2~1
+      byte_start: 0
+      byte_length: 1
+      bit_start: 0
+      bit_length: 2
+      enum_id: 1
+      data_range: ''
+      ref_range: ''
+      scaling: 1
+      offset: 0
+      unit: ''
+      remark: TODO
+      r/w: r
+    - name: 仪表琥珀色警告灯
+      position_raw: Byte 1 bit 4~3
+      byte_start: 0
+      byte_length: 1
+      bit_start: 2
+      bit_length: 2
+      enum_id: 1
+      data_range: 0~3
+      ref_range: 0~3
+      scaling: 1
+      offset: 0
+      unit: ''
+      remark: TODO
+      r/w: r
+    - name: 仪表红色停机灯
+      position_raw: Byte 1 bit 6~5
+      byte_start: 0
+      byte_length: 1
+      bit_start: 4
+      bit_length: 2
+      enum_id: 1
+      data_range: 0~3
+      ref_range: 0~3
+      scaling: 1
+      offset: 0
+      unit: ''
+      remark: TODO
+      r/w: r
+    - name: MIL灯
+      position_raw: Byte 1 bit 8~7
+      byte_start: 0
+      byte_length: 1
+      bit_start: 6
+      bit_length: 2
+      enum_id: 30
+      data_range: 0~3
+      ref_range: 0~3
+      scaling: 1
+      offset: 0
+      unit: ''
+      remark: TODO
+      r/w: r
+    - name: 仪表闪烁发动机故障灯
+      position_raw: Byte 2 bit 2~1
+      byte_start: 1
+      byte_length: 1
+      bit_start: 0
+      bit_length: 2
+      enum_id: 35
+      data_range: 0~3
+      ref_range: 0~3
+      scaling: 1
+      offset: 0
+      unit: ''
+      remark: TODO
+      r/w: r
+    - name: 仪表闪烁琥珀色警告灯
+      position_raw: Byte 2 bit 4~3
+      byte_start: 1
+      byte_length: 1
+      bit_start: 2
+      bit_length: 2
+      enum_id: 35
+      data_range: 0~3
+      ref_range: 0~3
+      scaling: 1
+      offset: 0
+      unit: ''
+      remark: TODO
+      r/w: r
+    - name: 仪表闪烁红色停机灯
+      position_raw: Byte 2 bit 6~5
+      byte_start: 1
+      byte_length: 1
+      bit_start: 4
+      bit_length: 2
+      enum_id: 35
+      data_range: 0~3
+      ref_range: 0~3
+      scaling: 1
+      offset: 0
+      unit: ''
+      remark: TODO
+      r/w: r
+    - name: 闪烁MIL灯
+      position_raw: Byte 2 bit 8~7
+      byte_start: 1
+      byte_length: 1
+      bit_start: 6
+      bit_length: 2
+      enum_id: 31
+      data_range: 0~3
+      ref_range: 0~3
+      scaling: 1
+      offset: 0
+      unit: ''
+      remark: TODO
+      r/w: r
+  '0xFEDF':
+    priority: '0x18'
+    source_authority: software_json
+    channel: CAN0
+    interval: null
+    elements:
+    - name: 摩擦扭矩百分比
+      position_raw: Byte 1
+      byte_start: 0
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: -125~125
+      ref_range: -125~125
+      scaling: 1
+      offset: -125
+      unit: '%'
+      remark: TODO
+      min: -125
+      max: 125
+      r/w: r
+    - name: 排气流量
+      position_raw: Byte 6~7
+      byte_start: 5
+      byte_length: 2
+      bit_start: 0
+      bit_length: 16
+      enum_id: 0
+      data_range: 0~12851.00
+      ref_range: 0~12851.00
+      scaling: 0.2
+      offset: 0
+      unit: kg/h
+      remark: TODO
+      min: 0
+      max: 12851.0
+      precision: 1
+      r/w: r
+    - name: 上游氮氧传感器露点
+      position_raw: Byte 8 bit 2~1
+      byte_start: 7
+      byte_length: 1
+      bit_start: 0
+      bit_length: 2
+      enum_id: 40
+      data_range: 0~3
+      ref_range: 0~3
+      scaling: 1
+      offset: 0
+      unit: ''
+      remark: TODO
+      r/w: r
+    - name: 下游氮氧传感器露点
+      position_raw: Byte 8 bit 4~3
+      byte_start: 7
+      byte_length: 1
+      bit_start: 2
+      bit_length: 2
+      enum_id: 40
+      data_range: 0~3
+      ref_range: 0~3
+      scaling: 1
+      offset: 0
+      unit: ''
+      remark: TODO
+      r/w: r
+    - name: 氮氧传感器加热
+      position_raw: Byte 7 bit 4~1
+      byte_start: 6
+      byte_length: 1
+      bit_start: 0
+      bit_length: 4
+      enum_id: 39
+      data_range: 0~15
+      ref_range: 0~15
+      scaling: 164
+      offset: 0
+      unit: ''
+      remark: TODO
+      r/w: r
+  '0xFEE0':
+    priority: '0x18'
+    source_authority: software_json
+    channel: CAN0
+    interval: null
+    elements:
+    - name: 本次行驶距离
+      position_raw: Byte 1~4
+      byte_start: 0
+      byte_length: 4
+      bit_start: 0
+      bit_length: 32
+      enum_id: 0
+      data_range: 0~526385151.9
+      ref_range: 0~526385151.9
+      scaling: 0.125
+      offset: 0
+      unit: km
+      remark: TODO
+      min: 0
+      max: 526385151.9
+      precision: 3
+      r/w: r
+    - name: 累计行驶距离
+      position_raw: Byte 5~8
+      byte_start: 4
+      byte_length: 4
+      bit_start: 0
+      bit_length: 32
+      enum_id: 0
+      data_range: 0~526385151.9
+      ref_range: 0~526385151.9
+      scaling: 0.125
+      offset: 0
+      unit: km
+      remark: TODO
+      min: 0
+      max: 526385151.9
+      precision: 3
+      r/w: r
+  '0xFEE4':
+    priority: '0x18'
+    source_authority: software_json
+    channel: CAN0
+    interval: null
+    elements:
+    - name: 仪表预热指示灯
+      position_raw: Byte 4 bit 2~1
+      byte_start: 3
+      byte_length: 1
+      bit_start: 0
+      bit_length: 2
+      enum_id: 34
+      data_range: 0~3
+      ref_range: 0~3
+      scaling: 1
+      offset: 0
+      unit: ''
+      remark: TODO
+      r/w: r
+  '0xFEE5':
+    priority: '0x18'
+    source_authority: software_json
+    channel: CAN0
+    interval: null
+    elements:
+    - name: 发动机运行总时间
+      position_raw: Byte 1~4
+      byte_start: 0
+      byte_length: 4
+      bit_start: 0
+      bit_length: 32
+      enum_id: 0
+      data_range: 0~210554060.75
+      ref_range: 0~210554060.75
+      scaling: 0.05
+      offset: 0
+      unit: hr
+      remark: TODO
+      min: 0
+      max: 210554060.75
+      precision: 2
+      r/w: r
+  '0xFEE9':
+    priority: '0x18'
+    source_authority: software_json
+    channel: CAN0
+    interval: null
+    elements:
+    - name: 累计燃油消耗
+      position_raw: Byte 5~8
+      byte_start: 4
+      byte_length: 4
+      bit_start: 0
+      bit_length: 32
+      enum_id: 0
+      data_range: 0~2105540607.5
+      ref_range: 0~2105540607.5
+      scaling: 0.5
+      offset: 0
+      unit: L
+      remark: TODO
+      min: 0
+      max: 2105540607.5
+      precision: 1
+      r/w: r
+  '0xFEEB':
+    priority: '0x18'
+    source_authority: software_json
+    channel: CAN0
+    interval: null
+    elements:
+    - name: 部件标识制造者
+      position_raw: Byte 1~2
+      byte_start: 0
+      byte_length: 2
+      bit_start: 0
+      bit_length: 16
+      enum_id: 0
+      data_range: 0~255
+      ref_range: 0~255
+      scaling: 1
+      offset: 0
+      unit: ''
+      remark: TODO
+      min: 0
+      max: 255
+      r/w: r
+  '0xFEEE':
+    priority: '0x18'
+    source_authority: software_json
+    channel: CAN0
+    interval: null
+    elements:
+    - name: 冷却液温度
+      position_raw: Byte 1
+      byte_start: 0
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: -40~210
+      ref_range: -40~210
+      scaling: 1
+      offset: -40
+      unit: degC
+      remark: TODO
+      min: -40
+      max: 210
+      r/w: r
+    - name: 发动机燃油温度
+      position_raw: Byte 2
+      byte_start: 1
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: -40~210
+      ref_range: -40~210
+      scaling: 1
+      offset: -40
+      unit: degC
+      remark: TODO
+      min: -40
+      max: 210
+      r/w: r
+    - name: 发动机机油温度
+      position_raw: Byte 3~4
+      byte_start: 2
+      byte_length: 2
+      bit_start: 0
+      bit_length: 16
+      enum_id: 0
+      data_range: -273~1735
+      ref_range: -273~1735
+      scaling: 0.03125
+      offset: -273
+      unit: degC
+      remark: TODO
+      min: -273
+      max: 1735
+      precision: 5
+      r/w: r
+  '0xFEEF':
+    priority: '0x18'
+    source_authority: software_json
+    channel: CAN0
+    interval: null
+    elements:
+    - name: 发动机机油压力
+      position_raw: Byte 4
+      byte_start: 3
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0~1000
+      ref_range: 0~1000
+      scaling: 4
+      offset: 0
+      unit: kPa
+      remark: TODO
+      min: 0
+      max: 1000
+      r/w: r
+  '0xFEF0':
+    priority: '0x06'
+    source_authority: word
+    channel: CAN0
+    interval: 100
+    elements:
+    - name: PTO油温
+      position_raw: Byte 1
+      byte_start: 0
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: -40℃到210℃
+      ref_range: -40℃到210℃
+      scaling: 1
+      offset: -40
+      unit: ℃
+      remark: 1℃/bit
+      min: -40
+      max: 210
+      enum_id: 0
+      r/w: r
+    - name: PTO转速
+      position_raw: Byte 2~3
+      byte_start: 1
+      byte_length: 2
+      bit_start: 0
+      bit_length: 16
+      data_range: 0到8031rpm
+      ref_range: 0到8031rpm
+      scaling: 0.125
+      offset: 0
+      unit: rpm
+      remark: 0.125rpm/bit
+      min: 0
+      max: 8031
+      enum_id: 0
+      r/w: rw
+      precision: 3
+    - name: PTO设置转速
+      position_raw: Byte 4~5
+      byte_start: 3
+      byte_length: 2
+      bit_start: 0
+      bit_length: 16
+      data_range: --
+      ref_range: --
+      scaling: null
+      offset: null
+      unit: ''
+      remark: --
+      enum_id: 0
+      r/w: ''
+    - name: 未定义
+      position_raw: Byte 6 bit 8~7
+      byte_start: 5
+      byte_length: 1
+      bit_start: 6
+      bit_length: 2
+      data_range: --
+      ref_range: --
+      scaling: null
+      offset: null
+      unit: ''
+      remark: --
+      enum_id: 0
+      r/w: ''
+    - name: PTO外部控制
+      position_raw: Byte 6 bit 6~5
+      byte_start: 5
+      byte_length: 1
+      bit_start: 4
+      bit_length: 2
+      data_range: 00 ~ 01
+      ref_range: 00 ~ 01
+      scaling: null
+      offset: 0
+      unit: ''
+      remark: 00=关闭，01=开启
+      min: 0
+      max: 1
+      position_note: byte filled from previous Byte position in Word table
+      enum_id: 1
+      r/w: r
+    - name: PTO外部预设
+      position_raw: Byte 6 bit 4~3
+      byte_start: 5
+      byte_length: 1
+      bit_start: 2
+      bit_length: 2
+      data_range: --
+      ref_range: --
+      scaling: null
+      offset: null
+      unit: ''
+      remark: --
+      position_note: byte filled from previous Byte position in Word table
+      enum_id: 1
+      r/w: r
+    - name: PTO开关
+      position_raw: Byte 6 bit 2~1
+      byte_start: 5
+      byte_length: 1
+      bit_start: 0
+      bit_length: 2
+      data_range: 00 ~ 01
+      ref_range: 00 ~ 01
+      scaling: null
+      offset: 0
+      unit: ''
+      remark: 00=关闭，01=开启
+      min: 0
+      max: 1
+      position_note: byte filled from previous Byte position in Word table
+      enum_id: 1
+      r/w: r
+    - name: 未定义
+      position_raw: Byte 7
+      byte_start: 6
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: --
+      ref_range: --
+      scaling: null
+      offset: null
+      unit: ''
+      remark: --
+      enum_id: 0
+      r/w: ''
+    - name: PTO工作压力
+      position_raw: Byte 8
+      byte_start: 7
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: 0到4000kPa
+      ref_range: 0到4000kPa
+      scaling: 16
+      offset: 0
+      unit: kPa
+      remark: 16kPa/bit
+      min: 0
+      max: 4000
+      enum_id: 0
+      r/w: r
+  '0xFEF1':
+    priority: '0x18'
+    source_authority: software_json
+    channel: CAN0
+    interval: null
+    elements:
+    - name: 车速
+      position_raw: Byte 2~3
+      byte_start: 1
+      byte_length: 2
+      bit_start: 0
+      bit_length: 16
+      enum_id: 0
+      data_range: 0~250.996
+      ref_range: 0~250.996
+      scaling: 0.00390625
+      offset: 0
+      unit: km/h
+      remark: TODO
+      min: 0
+      max: 250.996
+      precision: 8
+      r/w: r
+  '0xFEF2':
+    priority: '0x18'
+    source_authority: software_json
+    channel: CAN0
+    interval: null
+    elements:
+    - name: 发动机燃料流量
+      position_raw: Byte 1~2
+      byte_start: 0
+      byte_length: 2
+      bit_start: 0
+      bit_length: 16
+      enum_id: 0
+      data_range: 0~3212.75
+      ref_range: 0~3212.75
+      scaling: 0.05
+      offset: 0
+      unit: L/h
+      remark: TODO
+      min: 0
+      max: 3212.75
+      precision: 2
+      r/w: r
+    - name: 发动机瞬态燃料经济性
+      position_raw: Byte 3~4
+      byte_start: 2
+      byte_length: 2
+      bit_start: 0
+      bit_length: 16
+      enum_id: 0
+      data_range: 0~125.498047
+      ref_range: 0~125.498047
+      scaling: 0.001953125
+      offset: 0
+      unit: km/L
+      remark: TODO
+      min: 0
+      max: 125.498047
+      precision: 9
+      r/w: r
+  '0xFEF5':
+    priority: '0x18'
+    source_authority: software_json
+    channel: CAN0
+    interval: null
+    elements:
+    - name: 环境压力
+      position_raw: Byte 1
+      byte_start: 0
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0~125
+      ref_range: 0~125
+      scaling: 0.5
+      offset: 0
+      unit: Kpa
+      remark: TODO
+      min: 0
+      max: 125
+      precision: 1
+      r/w: r
+    - name: 环境温度
+      position_raw: Byte 4~5
+      byte_start: 3
+      byte_length: 2
+      bit_start: 0
+      bit_length: 16
+      enum_id: 0
+      data_range: -273~1735
+      ref_range: -273~1735
+      scaling: 0.03125
+      offset: -273
+      unit: deg C
+      remark: TODO
+      min: -273
+      max: 1735
+      precision: 5
+      r/w: r
+  '0xFEF6':
+    priority: '0x18'
+    source_authority: software_json
+    channel: CAN0
+    interval: null
+    elements:
+    - name: 中冷后压力
+      position_raw: Byte 2
+      byte_start: 1
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0~500
+      ref_range: 0~500
+      scaling: 2
+      offset: 0
+      unit: kpa
+      remark: TODO
+      min: 0
+      max: 500
+      r/w: r
+    - name: 中冷后温度
+      position_raw: Byte 3
+      byte_start: 2
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: -40~210
+      ref_range: -40~210
+      scaling: 1
+      offset: -40
+      unit: deg C
+      remark: TODO
+      min: -40
+      max: 210
+      r/w: r
+  '0xFEF7':
+    priority: '0x18'
+    source_authority: software_json
+    channel: CAN0
+    interval: null
+    elements:
+    - name: 电池电压
+      position_raw: Byte 5~6
+      byte_start: 4
+      byte_length: 2
+      bit_start: 0
+      bit_length: 16
+      enum_id: 0
+      data_range: 0~3212.75
+      ref_range: 0~3212.75
+      scaling: 0.05
+      offset: 0
+      unit: V
+      remark: TODO
+      min: 0
+      max: 3212.75
+      precision: 2
+      r/w: r
+  '0xFEF8':
+    priority: '0x18'
+    source_authority: word
+    channel: CAN0
+    interval: 1000
+    elements:
+    - name: 控制系统压力
+      position_raw: Byte 1
+      byte_start: 0
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: 0到4000kPa
+      ref_range: 0到4000kPa
+      scaling: 16
+      offset: 0
+      unit: kPa
+      remark: 16kPa/bit
+      min: 0
+      max: 4000
+      enum_id: 0
+      r/w: r
+    - name: 变速箱油位
+      position_raw: Byte 2
+      byte_start: 1
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: --
+      ref_range: --
+      scaling: null
+      offset: null
+      unit: ''
+      remark: ''
+      enum_id: 0
+      r/w: ''
+    - name: 过滤器压差
+      position_raw: Byte 3
+      byte_start: 2
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: --
+      ref_range: --
+      scaling: null
+      offset: null
+      unit: ''
+      remark: ''
+      enum_id: 0
+      r/w: ''
+    - name: 润滑油压力
+      position_raw: Byte 4
+      byte_start: 3
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: 0到4000kPa
+      ref_range: 0到4000kPa
+      scaling: 16
+      offset: 0
+      unit: kPa
+      remark: 16kPa/bit
+      min: 0
+      max: 4000
+      enum_id: 0
+      r/w: r
+    - name: 变速箱油温
+      position_raw: Byte 5~6
+      byte_start: 4
+      byte_length: 2
+      bit_start: 0
+      bit_length: 16
+      data_range: -273℃到1735℃
+      ref_range: -273℃到1735℃
+      scaling: 0.03125
+      offset: -273
+      unit: ℃
+      remark: 0.03125℃/bit
+      min: -273
+      max: 1735
+      enum_id: 0
+      r/w: r
+      precision: 5
+    - name: 未定义
+      position_raw: Byte 7~8
+      byte_start: 6
+      byte_length: 2
+      bit_start: 0
+      bit_length: 16
+      data_range: --
+      ref_range: --
+      scaling: null
+      offset: null
+      unit: ''
+      remark: --
+      enum_id: 0
+      r/w: ''
+  '0xFEFC':
+    priority: '0x18'
+    source_authority: software_json
+    channel: CAN0
+    interval: null
+    elements:
+    - name: 燃油液位仪表
+      position_raw: Byte 2
+      byte_start: 1
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0~100
+      ref_range: 0~100
+      scaling: 0.4
+      offset: 0
+      unit: '%'
+      remark: TODO
+      min: 0
+      max: 100
+      precision: 1
+      r/w: r
+  '0xFEFF':
+    priority: '0x18'
+    source_authority: software_json
+    channel: CAN0
+    interval: null
+    elements:
+    - name: 油中含水灯
+      position_raw: Byte 1 bit 2~1
+      byte_start: 0
+      byte_length: 1
+      bit_start: 0
+      bit_length: 2
+      enum_id: 32
+      data_range: 0~3
+      ref_range: 0~3
+      scaling: 1
+      offset: 0
+      unit: ''
+      remark: TODO
+      r/w: r
+    - name: 仪表NCD/PCD报警灯
+      position_raw: Byte 2 bit 3~1
+      byte_start: 1
+      byte_length: 1
+      bit_start: 0
+      bit_length: 3
+      enum_id: 33
+      data_range: 0~7
+      ref_range: 0~7
+      scaling: 1
+      offset: 0
+      unit: ''
+      remark: TODO
+      r/w: r

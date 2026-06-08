@@ -1,0 +1,405 @@
+# 10_can_protocol_intro.yaml
+# 说明：
+# - 本文件用于让人员和大模型理解如何使用 protocol 文件与 enums 文件解析 CAN 帧。
+# - 本文件不保存版本更新记录；版本变更由 git 管理。
+# - 本文件只描述解析规则、文件联动关系、字段语义和代码实现参考，不替代 protocol/enums 的机器可读定义。
+
+document:
+  name: 10_can_protocol_intro
+  language: zh-CN
+  purpose: >
+    说明 TCU CAN 协议 YAML 的组织方式，以及解析程序应如何使用
+    12_can_protocol_frames.yaml 与 11_can_protocol_enums.yaml 联动解析 CAN 数据。
+    大模型在生成解析代码时，应优先参考本文件的解析流程，再读取 protocol 文件中的帧与元素定义，
+    如遇 enum_id 非 0，则继续读取 enums 文件完成枚举值翻译。
+  scope:
+    include:
+      - CAN 扩展帧 ID 的拆分方式
+      - protocol 文件中帧和 element 的含义
+      - enums 文件与 element.enum_id 的联动方式
+      - 8 字节 CAN 数据 data0 ~ data7 的字节/位编号规则
+      - 原始值、物理值、枚举值的解析流程
+      - 生成解析代码时应遵守的规则
+
+can_context:
+  physical_channel:
+    default_rule:
+      - condition: "PGN 在 0x1700 ~ 0x18FF 范围内"
+        channel: CAN1
+      - condition: "其余 PGN"
+        channel: CAN0
+    parser_requirement: >
+      解析程序收到 CAN 帧时，应使用实际接收通道与 protocol 文件中 frame.channel 对比。
+      通道不一致时不应直接丢弃原始数据，可记录 channel_mismatch 诊断信息，具体是否接受由上层策略决定。
+  bitrate:
+    value: 250
+    unit: kbps
+    note: "协议背景采用 SAE J1939 通用 250 kbps 通讯速率。"
+  can_id:
+    format: "29-bit extended CAN ID, displayed as 8 hex digits"
+    example_full_can_id: "0x06151E03"
+    fields:
+      priority_byte:
+        description: "扩展 ID 的前 2 个十六进制字符，协议中作为优先级/控制字节使用。"
+        example: "0x06"
+      pgn:
+        description: "扩展 ID 的中间 4 个十六进制字符，对应参数组编号。"
+        example: "0x151E"
+      source_or_firmware_id:
+        description: >
+          扩展 ID 的最后 2 个十六进制字符，对应 J1939 源地址 SA，
+          在本协议中用于区分发送方向。
+        values:
+          - direction: "TCU 发送 → 上位机/网关接收"
+            address: "0x03"
+          - direction: "上位机/网关发送 → TCU 接收"
+            address: "0x60"
+        example: "0x03"
+    protocol_frame_key:
+      description: >
+        protocol 文件使用“PGN”作为帧索引，不包含优先级和最后 1 字节源地址/固件编号。
+        因此完整 CAN ID 0x06151E03 在 protocol 文件中的帧键为 0x151E。
+      normalize_from_full_can_id: |
+        # 提取优先级字节和固件地址用于其它用途，但帧键仅使用 PGN
+        priority_byte = (can_id >> 24) & 0xFF
+        pgn = (can_id >> 8) & 0xFFFF
+        source_addr = can_id & 0xFF
+        frame_key = f"0x{pgn:04X}"
+
+payload_layout:
+  dlc:
+    bytes: 8
+  byte_order_naming:
+    data0: "CAN 数据第 1 字节，byte_start = 0"
+    data1: "CAN 数据第 2 字节，byte_start = 1"
+    data2: "CAN 数据第 3 字节，byte_start = 2"
+    data3: "CAN 数据第 4 字节，byte_start = 3"
+    data4: "CAN 数据第 5 字节，byte_start = 4"
+    data5: "CAN 数据第 6 字节，byte_start = 5"
+    data6: "CAN 数据第 7 字节，byte_start = 6"
+    data7: "CAN 数据第 8 字节，byte_start = 7"
+  bit_numbering:
+    rule: "每个 byte 内 bit_start 从 0 开始，bit_start = 0 表示最低位 LSB，bit_start = 7 表示最高位 MSB。"
+    word_to_yaml_examples:
+      - word_position: "Byte 1"
+        yaml_position:
+          byte_start: 0
+          byte_length: 1
+          bit_start: 0
+          bit_length: 8
+        extraction: "raw = data0"
+      - word_position: "Byte 1 bit 8~7"
+        yaml_position:
+          byte_start: 0
+          byte_length: 1
+          bit_start: 6
+          bit_length: 2
+        extraction: "raw = (data0 >> 6) & 0x03"
+      - word_position: "Byte 1 bit 2~1"
+        yaml_position:
+          byte_start: 0
+          byte_length: 1
+          bit_start: 0
+          bit_length: 2
+        extraction: "raw = data0 & 0x03"
+      - word_position: "Byte 3~4"
+        yaml_position:
+          byte_start: 2
+          byte_length: 2
+          bit_start: 0
+          bit_length: 16
+        extraction: "raw = data2 | (data3 << 8)"
+  multi_byte_default:
+    byte_order: little_endian
+    rule: >
+      对于 byte_length > 1 且未单独声明 byte_order 的连续多字节 element，
+      默认按 little-endian 组合原始值，即低地址字节为低 8 位。
+      例如 byte_start=2, byte_length=2 时 raw = data2 | (data3 << 8)。
+    note: >
+      如果后续 protocol 文件为个别 element 增加 byte_order 字段，
+      解析代码应优先使用 element 内部声明覆盖本默认值。
+
+files:
+  protocol_file:
+    logical_name: 12_can_protocol_frames
+    expected_name_pattern: "12_can_protocol_frames*.yaml"
+    top_level_key: frames
+    indexing:
+      key_format: "0xGGGG"
+      key_parts:
+        GGGG: "4 个十六进制字符，来自 PGN"
+      example: "0x151E"
+    frame_object_fields:
+      channel:
+        type: string
+        values: [CAN0, CAN1]
+        meaning: "该帧应在哪一路 CAN 总线上发送或接收。"
+      priority:
+        type: string
+        example: "0x16"
+        meaning: "优先级。"
+      interval:
+        type: integer
+        meaning: "发送周期。"
+      elements:
+        type: list
+        meaning: "当前帧内可解析的数据元素。一个 element 对应一个连续 bit 区域。"
+    element_fields:
+      name:
+        meaning: "元素名称，用于输出解析结果。"
+      description:
+        meaning: "数据范围或补充说明。"
+      byte_start:
+        type: integer
+        range: "0 ~ 7"
+        meaning: "元素起始字节，0 表示 data0。"
+      byte_length:
+        type: integer
+        range: "1 ~ 8"
+        meaning: "元素覆盖的字节数量。若 element 只占几个 bit，通常为 1。"
+      bit_start:
+        type: integer
+        range: "0 ~ 7"
+        meaning: "元素在 byte_start 内的起始 bit，0 表示最低位。"
+      bit_length:
+        type: integer
+        range: "1 ~ 64"
+        meaning: "元素实际占用 bit 数。"
+      scaling:
+        type: number_or_null
+        meaning: "物理值缩放系数。物理值 = raw * scaling + offset。"
+      offset:
+        type: number_or_null
+        meaning: "物理值偏移量。物理值 = raw * scaling + offset。"
+      unit:
+        type: string_or_null
+        meaning: "物理值单位，例如 %, rpm, ms, V, mV, KPa, °。"
+      enum_id:
+        type: integer
+        meaning: >
+          枚举引用 ID。若 enum_id 非 0，则该值直接对应 enums 文件中的 enum_id；
+          若 enum_id 为 0，则表示该 element 没有枚举引用，或者是普通多字节数值。
+      position_raw:
+        type: string
+        meaning: "从 Word 协议保留的原始位置描述，仅供审查和回查，不建议解析代码依赖。"
+
+  enums_file:
+    logical_name: 11_can_protocol_enums
+    expected_name_pattern: "11_can_protocol_enums.yaml"
+    top_level_key: enums
+    enum_object_fields:
+      enum_id:
+        type: integer
+        meaning: "枚举 ID，protocol 中 element.enum_id 使用该值进行引用。0 为无枚举保留值。"
+      name:
+        type: string
+        meaning: "枚举名称。"
+      kind:
+        type: string
+        values: [single, range]
+        meaning: "single 表示离散值枚举，range 表示范围枚举。"
+      values:
+        used_when: "kind == single"
+        meaning: "key 为原始整数值字符串，value 为该值含义。"
+      ranges:
+        used_when: "kind == range"
+        meaning: "每个范围包含 min、max、desc，用于按数值区间解释 raw 或物理值。"
+
+protocol_enum_linking:
+  rule_summary: >
+    protocol 文件负责告诉解析程序“哪个 CAN 帧的哪个 bit/byte 是哪个 element”；
+    enums 文件负责告诉解析程序“某个离散值或范围值代表什么含义”。
+  element_enum_id:
+    no_enum:
+      value: 0
+      behavior: >
+        仅输出 raw 和 physical_value。若 scaling 或 offset 为空，则 physical_value 可为空，
+        或直接等于 raw，由解析程序策略决定。
+    has_enum:
+      value: "non-zero enum_id"
+      behavior: >
+        使用 element.enum_id 到 enums 文件中查找 enum_id 相同的枚举定义。
+        解析结果应同时保留 raw 数值和 enum_text，避免丢失原始数据。
+  recommended_output_for_each_element:
+    - name
+    - raw_value
+    - physical_value
+    - unit
+    - enum_text
+    - enum_id
+    - byte_start
+    - bit_start
+    - bit_length
+
+decode_algorithm:
+  overview: >
+    解析 CAN 帧时，先用完整 CAN ID 归一化得到 protocol 的 frame_key，
+    再根据 frame_key 找到 frame 定义，然后逐个 element 从 8 字节 payload 中抽取 raw，
+    最后根据 scaling/offset/unit 和 enum_id 生成面向人员或程序的解析结果。
+  steps:
+    - step: 1
+      name: "读取 CAN 帧"
+      detail: "输入包括 bus、can_id、dlc 和 8 字节数据 data0 ~ data7。"
+    - step: 2
+      name: "归一化帧键"
+      detail: "从 CAN ID 提取 PGN 作为 frame_key，例如 0x06151E03 -> 0x151E。同时提取 priority_byte 和 source_addr 用于其它用途。"
+    - step: 3
+      name: "查找 protocol frame"
+      detail: "在 protocol.frames[frame_key] 中查找帧定义；查不到则返回 unknown_frame。"
+    - step: 4
+      name: "检查 channel"
+      detail: "比较输入 CAN 通道与 frame.channel。若不同，解析结果中标记 channel_mismatch。"
+    - step: 5
+      name: "逐个解析 elements"
+      detail: "对 frame.elements 中每个 element 使用 byte_start、bit_start、bit_length 抽取 raw。"
+    - step: 6
+      name: "计算物理值"
+      detail: "若 scaling 和 offset 均不为空，physical_value = raw * scaling + offset；否则保留 raw。"
+    - step: 7
+      name: "解析枚举"
+      detail: "若 enum_id 非 0，则到 enums 文件查找 enum_id，生成 enum_text。"
+    - step: 8
+      name: "输出结果"
+      detail: "每个 element 输出 name、raw_value、physical_value、unit、enum_text 等字段。"
+
+  reference_pseudocode: |
+    def normalize_frame_key(can_id: int) -> str:
+        # 从 29-bit CAN ID 中提取 PGN（PF + PS 字段）
+        pgn = (can_id >> 8) & 0xFFFF
+        return f"0x{pgn:04X}"
+
+    def extract_priority_byte(can_id: int) -> int:
+        return (can_id >> 24) & 0xFF
+
+    def extract_source_addr(can_id: int) -> int:
+        return can_id & 0xFF
+
+    def extract_raw(payload: bytes, byte_start: int, bit_start: int, bit_length: int) -> int:
+        # payload 必须是 data0 ~ data7，共 8 字节
+        # little-endian 整体展开后，bit_index = byte_start * 8 + bit_start
+        payload_u64 = int.from_bytes(payload[:8], byteorder="little", signed=False)
+        start_bit = byte_start * 8 + bit_start
+        mask = (1 << bit_length) - 1
+        return (payload_u64 >> start_bit) & mask
+
+    def decode_element(payload: bytes, element: dict, enums_by_id: dict) -> dict:
+        raw = extract_raw(
+            payload=payload,
+            byte_start=element["byte_start"],
+            bit_start=element.get("bit_start", 0),
+            bit_length=element["bit_length"],
+        )
+
+        scaling = element.get("scaling")
+        offset = element.get("offset")
+        if scaling is not None and offset is not None:
+            physical = raw * scaling + offset
+        else:
+            physical = raw
+
+        enum_text = None
+        enum_id = element.get("enum_id", 0)
+        if enum_id:
+            enum_def = enums_by_id.get(enum_id)
+            if enum_def:
+                if enum_def.get("kind") == "single":
+                    enum_text = enum_def.get("values", {}).get(str(raw))
+                elif enum_def.get("kind") == "range":
+                    for item in enum_def.get("ranges", []):
+                        value_for_range = physical
+                        if item["min"] <= value_for_range <= item["max"]:
+                            enum_text = item.get("desc")
+                            break
+
+        return {
+            "name": element.get("name"),
+            "raw_value": raw,
+            "physical_value": physical,
+            "unit": element.get("unit"),
+            "enum_id": enum_id,
+            "enum_text": enum_text,
+            "byte_start": element.get("byte_start"),
+            "bit_start": element.get("bit_start"),
+            "bit_length": element.get("bit_length"),
+        }
+
+encode_algorithm:
+  overview: >
+    若后续需要根据 protocol 文件生成 CAN 发送数据，可执行解析的逆过程。
+    对于普通数值 element，将物理值反算为 raw 后写入对应 bit；
+    对于 enum_id 非 0 的 element，应由调用方传入枚举原始整数值。
+  steps:
+    - step: 1
+      name: "建立 8 字节 payload"
+      detail: "初始化 data0 ~ data7 为 0，或基于已有 payload 修改。"
+    - step: 2
+      name: "将输入值转换为 raw"
+      detail: "若是物理值，raw = round((physical_value - offset) / scaling)；若是枚举，raw 为枚举整数。"
+    - step: 3
+      name: "范围检查"
+      detail: "确认 raw 能放入 bit_length 指定的位宽。"
+    - step: 4
+      name: "写入 bit 区域"
+      detail: "先清除目标 bit 区域，再将 raw 左移后写入 payload_u64。"
+    - step: 5
+      name: "导出 data0 ~ data7"
+      detail: "payload_u64.to_bytes(8, 'little')。"
+
+implementation_notes_for_llm:
+  must:
+    - "严格按 protocol.frames 的帧键匹配 CAN ID，不要直接用完整 8 位十六进制 CAN ID 作为 protocol 键。"
+    - "严格按 byte_start=0 对应 data0、bit_start=0 对应最低位来解析。"
+    - "enum_id 非 0 时必须读取 enums 文件，不要在 protocol 文件中臆造枚举文本。"
+    - "解析结果中保留 raw_value，避免缩放或枚举翻译导致原始信息丢失。"
+    - "Word 删除线元素视为已删除，不参与解析、生成代码或位置重叠判断。"
+  should:
+    - "输出 channel_mismatch、unknown_frame、unknown_enum、unknown_enum_value 等诊断信息。"
+    - "对于 scaling 或 offset 为空的 element，保留 raw_value，并将 physical_value 设置为 raw 或 null，需在代码中保持一致策略。"
+    - "对于 enum kind=range 的枚举，优先明确使用 physical_value 还是 raw_value；当前建议使用 physical_value 做范围判断。"
+    - "对于未定义、预留、-- 等元素，可以保留 raw_value，但业务层可选择不展示。"
+  should_not:
+    - "不要把 Word 的 Byte 1 解释为 byte_start=1。"
+    - "不要把 Word 的 bit 1 解释为最高位。"
+    - "不要把 enum_id: 0 当成有效枚举 ID。"
+    - "不要依赖 position_raw 编写解析代码；position_raw 仅用于人工审查。"
+
+examples:
+  bit_enum_decode:
+    frame_key: "0x151E"
+    element:
+      name: "当前系统状态"
+      byte_start: 0
+      byte_length: 1
+      bit_start: 4
+      bit_length: 4
+      scaling: 1
+      offset: 0
+      unit: ""
+      enum_id: 13
+    payload_example:
+      data0_hex: "0x20"
+    raw_calculation: "(0x20 >> 4) & 0x0F = 2"
+    enum_lookup: "到 enums 文件查找 enum_id = 13，再用 raw=2 查 values。"
+  numeric_decode:
+    frame_key: "0x1512"
+    element:
+      name: "踏板实际角度"
+      byte_start: 6
+      byte_length: 2
+      bit_start: 0
+      bit_length: 16
+      scaling: 0.002
+      offset: -50
+      unit: "°"
+      enum_id: 0
+    payload_example:
+      data6_hex: "0x10"
+      data7_hex: "0x27"
+    raw_calculation: "raw = 0x10 | (0x27 << 8) = 10000"
+    physical_calculation: "physical_value = 10000 * 0.002 - 50 = -30.0 °"
+  deleted_word_element:
+    pgn: "0x1513"
+    deleted_element_name: "寸进踏板实际角度"
+    rule: >
+      该元素在 Word 中为删除线内容，应视为已删除，不写入 protocol。
+      因此 Byte 3~4 只属于“当前踏板机械低点”，不构成活动元素重叠。

@@ -1,0 +1,471 @@
+# Enumerations referenced by frames[].elements[].enum_id. 0 is reserved for no enum.
+enums:
+- enum_id: 1
+  name: Switch
+  kind: single
+  values:
+    '0': 关闭
+    '1': 开启
+- enum_id: 2
+  name: GearPosition
+  kind: single
+  values:
+    '0': 停车挡
+    '1': 倒挡
+    '2': 空挡
+    '3': 前进挡
+    '4': 低挡
+- enum_id: 3
+  name: WarningIndicators
+  kind: single
+  values:
+    '0': 无
+    '1': 机油压力
+    '2': 电池
+    '3': 检查发动机
+- enum_id: 4
+  name: SystemStatus
+  kind: single
+  values:
+    '0': 正常
+    '1': 错误
+    '2': 警告
+    '3': 严重
+- enum_id: 5
+  name: Command Switch
+  kind: single
+  values:
+    '0': 无命令
+    '1': 执行命令
+- enum_id: 6
+  name: System Status
+  kind: single
+  values:
+    '0': 初始化
+    '1': 锁定
+    '2': 运行
+    '3': 调试
+    '4': 故障
+- enum_id: 7
+  name: System Enable
+  kind: single
+  values:
+    '0': 未使能
+    '1': 已使能
+- enum_id: 8
+  name: Shifting Lever Status
+  kind: single
+  values:
+    '0': 中位
+    '1': 前进
+    '2': 后退
+    '3': 故障
+- enum_id: 9
+  name: Gear Shift Lever Status
+  kind: single
+  values:
+    '0': 高档
+    '1': 低档
+- enum_id: 10
+  name: Gear Status
+  kind: single
+  values:
+    '0': 锁定
+    '1': 停止
+    '2': 高档
+    '3': 低档
+    '4': 倒档
+    '5': 故障
+- enum_id: 11
+  name: version
+  kind: single
+  values:
+    '0': 测试版
+    '1': 正式版
+- enum_id: 12
+  name: Switch
+  kind: single
+  values:
+    '0': 不需要
+    '1': 需要
+- enum_id: 13
+  name: System Status
+  kind: single
+  values:
+    '0': 无数据
+    '1': 初始化
+    '2': 运行中
+- enum_id: 14
+  name: Gear Shift Control Status
+  kind: single
+  values:
+    '0': 本地控制
+    '1': 外部控制
+- enum_id: 15
+  name: Clutch speed sensor fault
+  kind: single
+  values:
+    '0': 无故障
+    '1': 传感器离线
+    '2': 电源故障
+    '3': 传感器超量程
+    '4': 传感器位置不可信
+- enum_id: 16
+  name: Reversing handle fault
+  kind: single
+  values:
+    '0': 无故障
+    '1': 手柄离线
+- enum_id: 17
+  name: Angle sensor fault
+  kind: single
+  values:
+    '0': 无故障
+    '1': 传感器离线
+    '2': 电源故障
+    '3': 传感器超量程
+    '4': 传感器位置不可信
+- enum_id: 18
+  name: System pressure sensing fault
+  kind: single
+  values:
+    '0': 无故障
+    '1': 传感器离线
+    '2': 电源故障
+    '3': 传感器超量程
+    '4': 传感器压力不稳定
+- enum_id: 19
+  name: Clutch fault
+  kind: single
+  values:
+    '0': 无故障
+    '1': 电磁阀离线
+    '2': 未定义
+    '3': 未定义
+    '4': 离合器打滑
+- enum_id: 20
+  name: Driving environment description
+  kind: single
+  values:
+    '0': 自由环境
+    '1': 田间
+    '2': 道路
+    '3': 未定义
+- enum_id: 21
+  name: Disconnect power
+  kind: single
+  values:
+    '0': 允许动力系统工作
+    '1': 关闭动力传动系统
+    '2': 未定义
+    '3': 无动作
+- enum_id: 22
+  name: Transmission control
+  kind: single
+  values:
+    '0': 允许变速箱换挡
+    '1': 禁止变速箱换挡
+    '2': 变速箱由外部控制接管
+    '3': 无动作
+- enum_id: 23
+  name: Close differential lock Switch
+  kind: single
+  values:
+    '0': 开启
+    '1': 关闭
+- enum_id: 24
+  name: System State Machine
+  kind: single
+  values:
+    '0': 初始化
+    '1': 运行
+    '2': 锁定
+- enum_id: 25
+  name: System enablement
+  kind: single
+  values:
+    '0': 未使能
+    '1': 已使能
+- enum_id: 26
+  name: Reversing handle status
+  kind: single
+  values:
+    '0': 空挡
+    '1': 前进
+    '2': 后退
+- enum_id: 27
+  name: High and low gear lever status
+  kind: single
+  values:
+    '0': 高档
+    '1': 低档
+- enum_id: 28
+  name: Power shuttle status
+  kind: single
+  values:
+    '0': 停止
+    '1': 高档
+    '2': 低档
+    '3': 倒档
+- enum_id: 29
+  name: Engine torque mode
+  kind: single
+  values:
+    '0': 低怠速调速器/无请求（默认模式）
+    '1': 油门踏板调速器
+    '2': 巡航控制（正扭矩）
+    '3': PTO调速器
+    '4': 道路速度调速器
+    '5': ASR控制
+    '6': 变速箱控制
+    '7': ABS控制（未使用）
+    '8': 扭矩限制
+    '9': 高速调速器
+    '10': 发动机制动控制（仅正扭矩或速度请求）
+- enum_id: 30
+  name: Malfunction indicator lamp status
+  kind: single
+  values:
+    '0': 灯灭
+    '1': 灯亮
+    '2': WWH OBD短MIL
+- enum_id: 31
+  name: Flash Malfunction Indicator Lamp
+  kind: single
+  values:
+    '0': 慢闪
+    '1': 快闪
+    '2': 灭，C类DTC
+    '3': 亮/不闪
+- enum_id: 32
+  name: Water in fuel indicator
+  kind: single
+  values:
+    '0': 禁用
+    '1': 启用
+    '2': 错误
+    '3': 不可用
+- enum_id: 33
+  name: Instrument Panel NCD/PCD Warning Light Status
+  kind: single
+  values:
+    '0': 灭
+    '1': 常亮
+    '2': 闪烁
+- enum_id: 34
+  name: Lamp Status
+  kind: single
+  values:
+    '0': 灭
+    '1': 亮
+    '2': 错误
+    '3': 不可用
+- enum_id: 35
+  name: Flash Lamp Status
+  kind: single
+  values:
+    '0': 慢闪
+    '1': 快闪
+    '2': 保留
+    '3': 亮/不闪
+- enum_id: 36
+  name: Command to control the diesel particulate filter lamp Status
+  kind: single
+  values:
+    '0': 灭
+    '2': 闪烁
+    '4': 常亮
+- enum_id: 37
+  name: Exhaust System High Temperature Lamp Command
+  kind: single
+  values:
+    '0': 灭
+    '1': 亮
+- enum_id: 38
+  name: Engine Override Control Mode
+  kind: single
+  values:
+    '0': 超控禁用
+    '1': 速度控制
+    '2': 扭矩控制
+    '3': 速度/扭矩限制控制
+- enum_id: 39
+  name: Aftertreatment 1 Exhaust Dew Point
+  kind: single
+  values:
+    '0': 未达到露点
+    '4': 已达到露点
+    '8': 无效
+    '12': 无效
+- enum_id: 40
+  name: Dew Point
+  kind: single
+  values:
+    '0': '0'
+    '1': '1'
+    '2': '2'
+    '3': '3'
+- enum_id: 41
+  name: speed status
+  kind: single
+  values:
+    '0': 正常
+    '1': 超速
+- enum_id: 42
+  name: Gear Position
+  kind: range
+  ranges:
+  - min: -125
+    max: -65
+    desc: 停车挡
+  - min: -64
+    max: -1
+    desc: 倒挡
+  - min: 0
+    max: 0
+    desc: 空挡
+  - min: 1
+    max: 32
+    desc: 低挡
+  - min: 33
+    max: 64
+    desc: 高档
+- enum_id: 43
+  name: error message
+  kind: single
+  values:
+    '0': 无错误
+    '1': 换向手柄离线
+    '2': CAN1发送缓冲满
+    '3': CAN2发送缓冲满
+    '4': CAN1无可用邮箱
+    '5': CAN2无可用邮箱
+    '6': CAN1发送失败
+    '7': CAN2发送失败
+    '8': CAN1接收缓冲满
+    '9': CAN2接收缓冲满
+    '10': CAN1总线关闭状态
+    '11': CAN2总线关闭状态
+    '12': 电源超上限
+    '13': 电源低下限
+    '14': 电源不准确
+    '15': 12V电源超上限
+    '16': 12V电源低下限
+    '17': 5V电源超上限
+    '18': 5V电源低下限
+    '19': 无效FLASH地址
+    '20': FLASH已锁定
+    '21': FLASH编程错误
+    '22': FLASH写保护错误
+    '23': 无效VLv映射索引
+    '24': USART发送缓冲满
+    '25': USART发送失败
+    '26': USART接收缓冲满
+    '27': 无效Ps温度
+    '28': USART发送失败
+- enum_id: 170150
+  name: 系统状态机
+  kind: single
+  values:
+    '0': 初始化
+    '1': 锁定
+    '2': 运行
+    '3': 调试
+    '4': 故障
+    '5': 自检
+    '6': 阀测试
+  source_data_range: 0000 ~ 1111
+  source_remark: 0000=初始化，0001=锁定，0010=运行，0011=调试，0100=故障，0101=自检，0110=阀测试
+- enum_id: 171335
+  name: 请求的挡位
+  kind: single
+  values:
+    '65': 停车挡，-64~-1=倒挡
+    '0': 空挡，1~32=低挡，33~64=高挡
+  source_data_range: 0x00-0xFF
+  source_remark: 偏置-125后，-125~-65=停车挡，-64~-1=倒挡，0=空挡，1~32=低挡，33~64=高挡
+- enum_id: 228555
+  name: 闪存擦除
+  kind: single
+  values:
+    '0': 无请求
+    '1': 请求闪存擦除（解锁后）
+  source_data_range: 00 ~ 11
+  source_remark: 00=无请求，01=请求闪存擦除（解锁后）
+- enum_id: 278923
+  source: word
+  name: 闪存刷写
+  kind: single
+  values:
+    '0': 无请求
+    '1': 请求一次闪存刷写
+  source_data_range: 00 ~ 11
+  source_remark: 00=无请求，01=请求一次闪存刷写
+- enum_id: 335523
+  name: 错误类型
+  kind: single
+  values:
+    '0': 无错误
+  source_data_range: 0 ~ 250
+  source_remark: 0=无错误
+- enum_id: 374062
+  name: 高档电磁阀测试标识
+  kind: single
+  values:
+    '0': 不测试
+    '1': 测试
+  source_data_range: 00 ~ 11
+  source_remark: 00=不测试，01=测试
+- enum_id: 433927
+  name: 离合器H故障
+  kind: single
+  values:
+    '0': 无故障
+    '1': 电磁阀离线
+    '4': 离合器打滑
+  source_data_range: 00 ~ 11
+  source_remark: 000=无故障，001=电磁阀离线，100=离合器打滑
+- enum_id: 511250
+  name: 换挡请求
+  kind: single
+  values:
+    FB: STOP
+  source_data_range: -125到125
+  source_remark: 1gear/bit，FB=STOP
+- enum_id: 534627
+  name: 测试波形
+  kind: single
+  values:
+    '0': 未指定
+    '1': 正弦波
+    '2': 三角波
+    '3': 方波
+  source_data_range: 00 ~ 11
+  source_remark: 00=未指定，01=正弦波，10=三角波，11=方波
+- enum_id: 680743
+  name: 闪存解锁
+  kind: single
+  values:
+    '0': 无请求
+    '1': 请求闪存解锁
+  source_data_range: 00 ~ 11
+  source_remark: 00=无请求，01=请求闪存解锁
+- enum_id: 714299
+  name: 自检状态
+  kind: single
+  values:
+    '0': 未自检
+    '1': 自检完成，10，自检失败
+    '3': 未定义
+  source_data_range: 00 ~ 11
+  source_remark: 00=未自检，01=自检完成，10，自检失败，11=未定义
+- enum_id: 741963
+  name: 当前系统状态
+  kind: single
+  values:
+    '0': 无数据
+    '1': 初始化
+    '2': 运行中
+    '3': 已锁定
+  source_data_range: 0000 ~ 1111
+  source_remark: 0000=无数据，0001=初始化，0010=运行中，0011=已锁定

@@ -2,7 +2,7 @@
 
 /**
  * @file can_rx.h
- * @brief CAN 接收任务参数、product 宣告 ID 规则，以及启动接收任务的全局入口声明。
+ * @brief CAN 接收任务参数以及启动接收任务的全局入口声明。
  */
 
 #include <cstdint>
@@ -19,16 +19,6 @@ constexpr unsigned kMirrorTxTaskPriority = 3;
 constexpr int kTaskCore = 1;
 constexpr uint32_t kTaskStackBytes = 6144;
 constexpr unsigned kTaskPriority = 4;
-
-/** 总线 product_id 宣告帧参考扩展 ID（与方案文档一致）。 */
-constexpr uint32_t kProductAnnounceCanIdRef = 0x16174B03u;
-
-/** 匹配规则：`(extended_id29 & 0xFFFFFF) == kProductAnnounceIdMatchLow24`。 */
-constexpr uint32_t kProductAnnounceIdMatchLow24 = kProductAnnounceCanIdRef & 0x00FFFFFFu;
-
-constexpr bool extended_id_is_product_announce(uint32_t extended_id29) {
-  return (extended_id29 & 0x00FFFFFFu) == kProductAnnounceIdMatchLow24;
-}
 
 } // namespace gateway::can_rx
 

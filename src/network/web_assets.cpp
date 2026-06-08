@@ -35,25 +35,21 @@ const char kIndexHtml[] PROGMEM = R"rawliteral(
       </nav>
 
       <section id="page-system" class="page active">
-        <h2>系统状态</h2>
-        <p class="muted">数据字段后续由 CAN 模块接口直接提供，网络层仅负责透传。</p>
         <div id="system-groups" class="group-grid"></div>
       </section>
 
       <section id="page-calibration" class="page">
-        <h2>系统标定</h2>
-        <p class="muted">
-          表单当前占位；当前值由 CAN 模块接口提供，提交值后续直接注入 CAN 模块接口。
-        </p>
-        <div id="calibration-table" class="card"></div>
-        <button class="primary" type="button" onclick="submitCalibration()">
-          提交标定数据
-        </button>
-        <pre id="calibration-result" class="result"></pre>
+        <div id="calibration-cards" class="clutch-cards"></div>
+        <div id="flash-area" style="margin-top:18px; text-align:center;">
+          <button id="btn-flash-fw" class="primary" type="button"
+                  style="background:#e74c3c; padding:14px 32px; font-size:1.1em;">
+            烧写固件
+          </button>
+          <div id="flash-feedback" style="margin-top:10px; min-height:22px;"></div>
+        </div>
       </section>
 
       <section id="page-traffic" class="page">
-        <h2>流量统计</h2>
         <div class="cards two">
           <article class="card">
             <h3>CAN 流量统计</h3>
@@ -100,8 +96,6 @@ const char kIndexHtml[] PROGMEM = R"rawliteral(
       </section>
 
       <section id="page-provision" class="page">
-        <h2>网关配网</h2>
-
         <div id="ui-online" class="card" style="display:none">
           <h3>已连接外网 STA</h3>
           <dl class="kv">
@@ -159,7 +153,7 @@ const char kIndexHtml[] PROGMEM = R"rawliteral(
 </html>
 )rawliteral";
 
-const char kStyleCss[] PROGMEM = R"rawliteral(:root{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#182033;background:#eef3f8}body{margin:0}.shell{max-width:1080px;margin:0 auto;padding:24px}.hero{display:flex;justify-content:space-between;gap:16px;align-items:center;background:linear-gradient(135deg,#173b73,#2681c9);color:white;border-radius:20px;padding:24px;box-shadow:0 12px 36px #173b7333}.hero h1{margin:.2em 0}.eyebrow{letter-spacing:.12em;text-transform:uppercase;opacity:.75}.status-pill{background:#ffffff22;border:1px solid #ffffff55;border-radius:999px;padding:10px 14px;white-space:nowrap}.tabs{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:18px 0}.tab{border:0;border-radius:14px;padding:14px 8px;background:white;color:#2d3b55;font-weight:700;box-shadow:0 4px 16px #1b355214}.tab.active{background:#1d75bd;color:white}.page{display:none}.page.active{display:block}.card{background:white;border-radius:18px;padding:18px;margin:14px 0;box-shadow:0 6px 22px #1b355214}.cards.two{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}.group-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px}.switch-group h3{margin-top:0}.switch-row{display:flex;justify-content:space-between;gap:12px;padding:11px 0;border-top:1px solid #edf1f5}.switch-row:first-of-type{border-top:0}.value{font-weight:800;color:#115c9c}.kv{display:grid;grid-template-columns:minmax(120px,1fr) 1.2fr;gap:8px 14px}.kv dt{color:#6e7788}.kv dd{margin:0;font-weight:700}.muted{color:#657084}label{display:block;margin:10px 0;color:#46536a}input{box-sizing:border-box;width:min(100%,320px);padding:10px;border:1px solid #cfd8e5;border-radius:10px}button{cursor:pointer;border:0;border-radius:12px;padding:10px 14px;background:#e7eef7;color:#1f3657;font-weight:700}.primary{background:#1d75bd;color:white}.result{white-space:pre-wrap;background:#101827;color:#dbeafe;border-radius:12px;padding:12px;min-height:24px;overflow:auto}.cal-row{display:grid;grid-template-columns:1.2fr 1fr 1fr;gap:10px;align-items:center;padding:10px 0;border-top:1px solid #edf1f5}.cal-row.header{font-weight:800;color:#657084;border-top:0}@media(max-width:720px){.shell{padding:12px}.hero{display:block}.tabs{grid-template-columns:repeat(2,1fr)}.cards.two{grid-template-columns:1fr}.kv{grid-template-columns:1fr}.cal-row{grid-template-columns:1fr}})rawliteral";
+const char kStyleCss[] PROGMEM = R"rawliteral(:root{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#182033;background:#eef3f8}body{margin:0}.shell{max-width:1080px;margin:0 auto;padding:24px}.hero{display:flex;justify-content:space-between;gap:16px;align-items:center;background:linear-gradient(135deg,#173b73,#2681c9);color:white;border-radius:20px;padding:24px;box-shadow:0 12px 36px #173b7333}.hero h1{margin:.2em 0}.eyebrow{letter-spacing:.12em;text-transform:uppercase;opacity:.75}.status-pill{background:#ffffff22;border:1px solid #ffffff55;border-radius:999px;padding:10px 14px;white-space:nowrap}.tabs{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:18px 0}.tab{border:0;border-radius:14px;padding:14px 8px;background:white;color:#2d3b55;font-weight:700;box-shadow:0 4px 16px #1b355214}.tab.active{background:#1d75bd;color:white}.page{display:none}.page.active{display:block}.card{background:white;border-radius:18px;padding:18px;margin:14px 0;box-shadow:0 6px 22px #1b355214}.cards.two{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}.group-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px}.switch-group h3{margin-top:0}.switch-row{display:flex;justify-content:space-between;gap:12px;padding:11px 0;border-top:1px solid #edf1f5}.switch-row:first-of-type{border-top:0}.value{font-weight:800;color:#115c9c}.kv{display:grid;grid-template-columns:minmax(120px,1fr) 1.2fr;gap:8px 14px}.kv dt{color:#6e7788}.kv dd{margin:0;font-weight:700}.muted{color:#657084}label{display:block;margin:10px 0;color:#46536a}input{box-sizing:border-box;width:min(100%,320px);padding:10px;border:1px solid #cfd8e5;border-radius:10px}button{cursor:pointer;border:0;border-radius:12px;padding:10px 14px;background:#e7eef7;color:#1f3657;font-weight:700}.primary{background:#1d75bd;color:white}.result{white-space:pre-wrap;background:#101827;color:#dbeafe;border-radius:12px;padding:12px;min-height:24px;overflow:auto}.cal-row{display:grid;grid-template-columns:1.2fr 1fr 1fr;gap:10px;align-items:center;padding:10px 0;border-top:1px solid #edf1f5}.cal-row.header{font-weight:800;color:#657084;border-top:0}.clutch-cards{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.clutch-card{background:white;border-radius:18px;padding:18px;box-shadow:0 6px 22px #1b355214}.clutch-card h3{margin:0 0 8px;color:#173b73}.clutch-card .cur-val{margin:8px 0;font-size:1.05em}.clutch-card .cur-val span{font-weight:800;color:#115c9c}.clutch-card input{width:100%;max-width:100%;margin:8px 0}.clutch-card .btn-row{display:flex;align-items:center;gap:10px;margin-top:4px}.clutch-card .feedback{font-size:.88em;margin-top:6px;min-height:20px}@media(max-width:720px){.shell{padding:12px}.hero{display:block}.tabs{grid-template-columns:repeat(2,1fr)}.cards.two{grid-template-columns:1fr}.kv{grid-template-columns:1fr}.cal-row{grid-template-columns:1fr}.clutch-cards{grid-template-columns:1fr}})rawliteral";
 
 const char kAppJs[] PROGMEM = R"rawliteral(
 const POLL_MS = 2000;
@@ -259,7 +253,7 @@ function applySystem(d) {
     const card = document.createElement('article');
     card.className = 'card switch-group';
     card.innerHTML = '<h3></h3>';
-    card.querySelector('h3').textContent = group.name || '关联开关组';
+    card.querySelector('h3').textContent = group.name || '状态组';
 
     (group.items || []).forEach((item) => {
       const row = document.createElement('div');
@@ -281,26 +275,46 @@ function applySystem(d) {
 function applyCalibration(d) {
   setTop('系统标定');
 
-  const root = $('calibration-table');
+  const root = $('calibration-cards');
   if (!root) {
     return;
   }
 
-  let html = '<div class="cal-row header">'
-    + '<span>数据名称</span>'
-    + '<span>数据当前值</span>'
-    + '<span>数据值更改</span>'
-    + '</div>';
+  // 首次调用：创建卡片 DOM；后续轮询：仅更新当前值文本，保留输入框焦点
+  if (!root.children.length) {
+    (d.clutches || []).forEach(function(clutch) {
+      const card = document.createElement('div');
+      card.className = 'clutch-card';
+      card.dataset.clutchId = clutch.id;
 
-  (d.items || []).forEach((item, index) => {
-    html += '<div class="cal-row">'
-      + '<span>' + esc(item.name || '标定项') + '</span>'
-      + '<span class="value">' + esc(item.current || '—') + '</span>'
-      + '<input data-cal-idx="' + index + '" placeholder="待输入">'
-      + '</div>';
+      card.innerHTML =
+        '<h3></h3>'
+        + '<div class="cur-val">起步点当前值 <span></span></div>'
+        + '<label>起步点更改值 <input type="text" placeholder="输入新值（%）"></label>'
+        + '<div class="btn-row">'
+        +   '<button class="primary" type="button">提交标定数据</button>'
+        + '</div>'
+        + '<div class="feedback"></div>';
+
+      card.querySelector('h3').textContent = clutch.name || '离合器标定';
+      card.querySelector('.cur-val span').textContent = clutch.current || '—';
+      card.querySelector('input').dataset.clutchId = clutch.id;
+      card.querySelector('button').addEventListener('click', function() {
+        return submitOneClutch(clutch.id, card);
+      });
+
+      root.appendChild(card);
+    });
+    return;
+  }
+
+  // 后续轮询：只更新当前值
+  (d.clutches || []).forEach(function(clutch) {
+    const card = root.querySelector('.clutch-card[data-clutch-id="' + clutch.id + '"]');
+    if (card) {
+      card.querySelector('.cur-val span').textContent = clutch.current || '—';
+    }
   });
-
-  root.innerHTML = html;
 }
 
 function applyTraffic(d) {
@@ -431,17 +445,39 @@ async function wfSubmit(e) {
   return false;
 }
 
-async function submitCalibration() {
-  const values = [];
-  document.querySelectorAll('[data-cal-idx]').forEach((input) => values.push(input.value));
+async function submitOneClutch(clutchId, card) {
+  const input = card.querySelector('input');
+  const fb = card.querySelector('.feedback');
+  const value = (input.value || '').trim();
 
-  const response = await fetch('/api/calibration/submit', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ placeholder: true, values }),
-  });
+  if (!value) {
+    fb.textContent = '请输入更改值';
+    fb.style.color = '#c0392b';
+    return;
+  }
 
-  setText('calibration-result', await response.text());
+  fb.textContent = '提交中...';
+  fb.style.color = '#657084';
+
+  try {
+    const response = await fetch('/api/calibration/submit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ clutch: clutchId, value: value }),
+    });
+    const result = await response.json();
+
+    if (result.ok) {
+      fb.textContent = '✓ 提交成功';
+      fb.style.color = '#27ae60';
+    } else {
+      fb.textContent = '✗ ' + (result.error || '提交失败');
+      fb.style.color = '#c0392b';
+    }
+  } catch (e) {
+    fb.textContent = '✗ 网络错误';
+    fb.style.color = '#c0392b';
+  }
 }
 
 function esc(s) {
@@ -453,6 +489,35 @@ function esc(s) {
     "'": '&#39;',
   }[c]));
 }
+
+async function flashFirmware() {
+  if (!confirm('确认进行固件刷写？')) return;
+
+  const fb = $('flash-feedback');
+  fb.textContent = '发送中...';
+  fb.style.color = '#657084';
+
+  try {
+    const response = await fetch('/api/flash_firmware', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+    });
+    const result = await response.json();
+    if (result.ok) {
+      fb.textContent = '✓ 刷写命令已发送';
+      fb.style.color = '#27ae60';
+    } else {
+      fb.textContent = '✗ ' + (result.error || '发送失败');
+      fb.style.color = '#c0392b';
+    }
+  } catch (e) {
+    fb.textContent = '✗ 网络错误';
+    fb.style.color = '#c0392b';
+  }
+}
+
+$('btn-flash-fw').addEventListener('click', flashFirmware);
 
 startPoll();
 )rawliteral";

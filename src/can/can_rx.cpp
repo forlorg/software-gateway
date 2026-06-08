@@ -1,15 +1,14 @@
 /**
  * @file can_rx.cpp
- * @brief CAN 接收 FreeRTOS 任务：解析 product 宣告、编码 AT 行、USB CDC 镜像（队列 + 独立任务）、条件 MQTT 上行。
+ * @brief CAN 接收 FreeRTOS 任务：统计、转交解析模块、编码 AT 行、USB CDC 镜像（队列 + 独立任务）、条件 MQTT 上行。
  */
 
 #include "can_rx.h"
-#include "system/gateway_context.h"
+#include "can/can_parsed_data.h"
 #include "can/can_traffic_stats.h"
 #include "protocol/at_protocol.h"
 #include "system/time_sync.h"
 
-#include "network/mqtt_manager.h"
 #include "task/mqtt_uplink.h"
 #include "system/statistics.h"
 
@@ -84,11 +83,9 @@ void rx_task(void *) {
     gateway::can_traffic_stats::record_rx_frame(msg.data_length_code);
     gateway::statistics::add_can_rx(1);
 
-    uint32_t cid = msg.identifier & (msg.extd ? 0x1FFFFFFFu : 0x7FFu);
-    if (msg.extd && gateway::can_rx::extended_id_is_product_announce(cid)) {
-      if (gateway::ctx::set_product_id_from_payload_le(msg.data, msg.data_length_code)) {
-        gateway::mqtt_manager::notify_product_id_changed();
-      }
+    if (msg.extd) {
+      const uint32_t cid = msg.identifier & 0x1FFFFFFFu;
+      gateway::can_parsed_data::process_frame(cid, msg.data, msg.data_length_code);
     }
 
     uint32_t ts_pack{};
@@ -131,6 +128,7 @@ void init_serial_mirror() {
 }
 
 void can_rx_start_task() {
+  gateway::can_parsed_data::init();
   xTaskCreatePinnedToCore(rx_task, "can_rx", gateway::can_rx::kTaskStackBytes, nullptr,
                           static_cast<UBaseType_t>(gateway::can_rx::kTaskPriority), nullptr,
                           static_cast<BaseType_t>(gateway::can_rx::kTaskCore));

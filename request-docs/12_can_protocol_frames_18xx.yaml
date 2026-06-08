@@ -1,0 +1,4958 @@
+# ────────────────────────────────────────────────────────
+# 此文件从 12_can_protocol_frames.yaml 拆分而来
+# 包含 PGN 范围: 0x18xx
+#
+# 完整协议由以下文件共同组成:
+#   - 12_can_protocol_frames_15xx.yaml  (0x15xx)
+#   - 12_can_protocol_frames_17xx.yaml  (0x17xx)
+#   - 12_can_protocol_frames_18xx.yaml  (0x18xx) ← 当前文件
+#   - 12_can_protocol_frames_other.yaml  (other PGNs (0x01xx, 0xFxxx))
+#
+# 解析时应将所有文件合并或分别加载。
+# 公共 metadata 定义与 12_can_protocol_frames.yaml（原文件）一致。
+# ────────────────────────────────────────────────────────
+
+# TCU CAN protocol, indexed by PGN. Byte numbering uses data0..data7; bit_start=0 means LSB.
+metadata:
+  schema_version: 12_can_protocol_frames
+  description: >
+    TCU CAN 通讯协议帧定义文件。以 PGN（Parameter Group Number）为索引，
+    描述每个 CAN 帧内各 element 的字节/位布局、物理量纲和枚举引用。
+    解析程序应配合 10_can_protocol_intro.yaml 的解析流程，并联动
+    11_can_protocol_enums.yaml 完成枚举值翻译。
+
+  # ── CAN ID 格式 ──────────────────────────────────────
+  can_id_format:
+    type: "29-bit extended CAN ID (SAE J1939 兼容)"
+    display: "8 位十六进制字符串，如 0x06151E03"
+    fields:
+      priority_byte:
+        bits: "ID[28:24]"
+        description: >
+          最高字节，包含 J1939 优先级 Priority(3 bits) + 保留位 R(1 bit) +
+          数据页 DP(1 bit)。在 32-bit 表示中为 (can_id >> 24) & 0xFF。
+        example: "0x06"
+      pgn:
+        bits: "ID[23:8]"
+        description: >
+          参数组编号 PGN，由 PF（PDU Format, ID[23:16]）和 PS（PDU Specific,
+          ID[15:8]）组成。PF < 240 时 PS 为目标地址 DA；PF >= 240 时 PS 为
+          组扩展 GE。提取公式: pgn = (can_id >> 8) & 0xFFFF。
+        example: "0x151E"
+      source_address:
+        bits: "ID[7:0]"
+        description: >
+          J1939 源地址 SA，在本协议中用于区分通信方向。
+          TCU → 上位机/网关: 0x03
+          上位机/网关 → TCU: 0x60
+        example: "0x03 (TCU 发出)"
+
+  # ── 帧键索引规则 ──────────────────────────────────────
+  index_rule:
+    method: "帧键 = PGN 的 4 位十六进制字符串"
+    format: "0xGGGG"
+    description: >
+      帧键仅使用 PGN，不包含优先级字节和源地址。
+      完整 CAN ID 0x06151E03 在本文件中的帧键为 0x151E。
+      priority 和 source_address 信息分别存储在帧对象的 priority 字段和
+      CAN ID 的 SA 字段中，不参与帧键匹配。
+    derivation: |
+      pgn = (can_id >> 8) & 0xFFFF
+      frame_key = f"0x{pgn:04X}"
+
+  # ── 优先级规则 ───────────────────────────────────────
+  priority_rule:
+    description: >
+      每个帧的 priority 字段来自两路来源：Word 协议文档和软件 JSON 配置。
+      当同一 PGN 在两路来源中均存在且 priority 不一致时，以 Word 文档的
+      priority 为准。source_authority 字段记录了当前帧定义的来源。
+    sources:
+      word: "Word 协议文档，优先级较高"
+      software_json: "软件 JSON 配置"
+
+  # ── CAN 通道分配规则 ─────────────────────────────────
+  channel_rule:
+    description: >
+      根据 PGN 范围自动确定 CAN 物理通道。
+      PGN 在 0x1700 ~ 0x18FF 范围内的帧走 CAN1，
+      其余 PGN 的帧走 CAN0。
+      每个帧对象内的 channel 字段必须与此规则一致。
+    mapping:
+      - pgn_range: "0x1700 ~ 0x18FF"
+        channel: CAN1
+      - pgn_range: "其余"
+        channel: CAN0
+    parser_requirement: >
+      解析程序应将实际接收通道与 frame.channel 比对，
+      不一致时记录 channel_mismatch 诊断信息。
+
+  # ── Payload 字节/位编号 ──────────────────────────────
+  byte_numbering:
+    description: "CAN 数据字节编号为 data0 ~ data7，共 8 字节"
+    byte_start: "0 表示 data0，7 表示 data7"
+    note: "Word 文档中的 Byte 1 对应 byte_start=0，切勿直接使用 Word 编号"
+
+  bit_numbering:
+    description: "每个字节内部 bit_start 从 0（LSB 最低位）到 7（MSB 最高位）"
+    rule: "bit_start=0 表示该字节的最低位"
+    note: "Word 文档中的 bit 1 为 MSB，切勿直接使用 Word 编号"
+
+  multi_byte_order:
+    default: little_endian
+    description: >
+      对于 byte_length > 1 的连续多字节 element，默认按 little-endian 组合。
+      低地址字节为数值的低 8 位。
+      例如 byte_start=2, byte_length=2 → raw = data2 | (data3 << 8)。
+      若 element 显式声明 byte_order 字段，应优先使用其值覆盖本默认值。
+
+  # ── 枚举引用规则 ─────────────────────────────────────
+  enum_id_rule:
+    description: >
+      element.enum_id 引用 11_can_protocol_enums.yaml 中的 enums[].enum_id。
+      enum_id = 0 表示该 element 无枚举引用，仅输出 raw 和 physical_value。
+      enum_id ≠ 0 时必须查找对应的枚举定义，生成 enum_text 并同时保留 raw。
+
+  # ── 协议范围 ─────────────────────────────────────────
+  scope:
+    frame_count: 200
+    pgn_range: "0x0100 ~ 0xFEFF"
+    channel_distribution:
+      CAN0: 103
+      CAN1: 97
+    bitrate: "250 kbps (SAE J1939 通用速率)"
+frames:
+  '0x1810':
+    priority: '0x06'
+    source_authority: word
+    channel: CAN1
+    interval: 200
+    elements:
+    - name: 未定义
+      position_raw: Byte 1 bit 8~7
+      byte_start: 0
+      byte_length: 1
+      bit_start: 6
+      bit_length: 2
+      data_range: --
+      ref_range: --
+      scaling: null
+      offset: null
+      unit: ''
+      remark: --
+      enum_id: 0
+      r/w: ''
+    - name: 测试波形
+      position_raw: Byte 1 bit 6~5
+      byte_start: 0
+      byte_length: 1
+      bit_start: 4
+      bit_length: 2
+      data_range: 00 ~ 11
+      ref_range: 00 ~ 11
+      scaling: null
+      offset: 0
+      unit: ''
+      remark: 00=未指定，01=正弦波，10=三角波，11=方波
+      min: 0
+      max: 3
+      position_note: byte filled from previous Byte position in Word table
+      enum_id: 534627
+      r/w: ''
+    - name: 未定义
+      position_raw: Byte 1 bit 4~3
+      byte_start: 0
+      byte_length: 1
+      bit_start: 2
+      bit_length: 2
+      data_range: --
+      ref_range: --
+      scaling: null
+      offset: null
+      unit: ''
+      remark: --
+      position_note: byte filled from previous Byte position in Word table
+      enum_id: 0
+      r/w: ''
+    - name: 关闭比例阀调试状态
+      position_raw: Byte 1 bit 2
+      byte_start: 0
+      byte_length: 1
+      bit_start: 1
+      bit_length: 1
+      data_range: 0 ~ 1
+      ref_range: 0 ~ 1
+      scaling: null
+      offset: 0
+      unit: ''
+      remark: 0=无命令，1=执行命令
+      min: 0
+      max: 1
+      position_note: byte filled from previous Byte position in Word table
+      enum_id: 5
+      r/w: ''
+    - name: 开启比例阀调试状态
+      position_raw: Byte 1 bit 1
+      byte_start: 0
+      byte_length: 1
+      bit_start: 0
+      bit_length: 1
+      data_range: 0 ~ 1
+      ref_range: 0 ~ 1
+      scaling: null
+      offset: 0
+      unit: ''
+      remark: 0=无命令，1=执行命令
+      min: 0
+      max: 1
+      position_note: byte filled from previous Byte position in Word table
+      enum_id: 5
+      r/w: ''
+    - name: 测试频率
+      position_raw: Byte 2~3
+      byte_start: 1
+      byte_length: 2
+      bit_start: 0
+      bit_length: 16
+      data_range: 0 ~ 65000
+      ref_range: 0 ~ 65000
+      scaling: 0.01
+      offset: 0
+      unit: Hz
+      remark: 0.01Hz/bit
+      min: 0
+      max: 65000
+      enum_id: 0
+      r/w: ''
+    - name: 切片数量
+      position_raw: Byte 4
+      byte_start: 3
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: 0 ~ 256
+      ref_range: 0 ~ 256
+      scaling: 1
+      offset: 0
+      unit: ''
+      remark: 1/bit
+      min: 0
+      max: 256
+      enum_id: 0
+      r/w: ''
+    - name: 振幅
+      position_raw: Byte 5
+      byte_start: 4
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: 0 ~ 100%
+      ref_range: 0 ~ 100%
+      scaling: 0.4
+      offset: 0
+      unit: '%'
+      remark: 0.4%/bit
+      min: 0
+      max: 100
+      enum_id: 0
+      r/w: ''
+    - name: 高档电磁阀测试标识
+      position_raw: Byte 6 bit 8~7
+      byte_start: 5
+      byte_length: 1
+      bit_start: 6
+      bit_length: 2
+      data_range: 00 ~ 11
+      ref_range: 00 ~ 11
+      scaling: null
+      offset: 0
+      unit: ''
+      remark: 00=不测试，01=测试
+      min: 0
+      max: 3
+      enum_id: 374062
+      r/w: ''
+    - name: 低档电磁阀测试标识
+      position_raw: Byte 6 bit 6~5
+      byte_start: 5
+      byte_length: 1
+      bit_start: 4
+      bit_length: 2
+      data_range: 00 ~ 11
+      ref_range: 00 ~ 11
+      scaling: null
+      offset: 0
+      unit: ''
+      remark: 00=不测试，01=测试
+      min: 0
+      max: 3
+      position_note: byte filled from previous Byte position in Word table
+      enum_id: 374062
+      r/w: ''
+    - name: 倒档电磁阀测试标识
+      position_raw: Byte 6 bit 4~3
+      byte_start: 5
+      byte_length: 1
+      bit_start: 2
+      bit_length: 2
+      data_range: 00 ~ 11
+      ref_range: 00 ~ 11
+      scaling: null
+      offset: 0
+      unit: ''
+      remark: 00=不测试，01=测试
+      min: 0
+      max: 3
+      position_note: byte filled from previous Byte position in Word table
+      enum_id: 374062
+      r/w: ''
+    - name: PTO电磁阀测试标识
+      position_raw: Byte 6 bit 2~1
+      byte_start: 5
+      byte_length: 1
+      bit_start: 0
+      bit_length: 2
+      data_range: 00 ~ 11
+      ref_range: 00 ~ 11
+      scaling: null
+      offset: 0
+      unit: ''
+      remark: 00=不测试，01=测试
+      min: 0
+      max: 3
+      position_note: byte filled from previous Byte position in Word table
+      enum_id: 374062
+      r/w: ''
+    - name: 未定义
+      position_raw: Byte 7~8
+      byte_start: 6
+      byte_length: 2
+      bit_start: 0
+      bit_length: 16
+      data_range: --
+      ref_range: --
+      scaling: null
+      offset: null
+      unit: ''
+      remark: --
+      enum_id: 0
+      r/w: ''
+  '0x1850':
+    priority: '0x06'
+    source_authority: word
+    channel: CAN1
+    interval: 200
+    elements:
+    - name: 未定义
+      position_raw: Byte 1 bit 8~6
+      byte_start: 0
+      byte_length: 1
+      bit_start: 5
+      bit_length: 3
+      data_range: ''
+      ref_range: ''
+      scaling: null
+      offset: null
+      unit: ''
+      remark: ''
+      enum_id: 0
+      r/w: ''
+    - name: FLASH 刷写
+      position_raw: Byte 1 bit 5
+      byte_start: 0
+      byte_length: 1
+      bit_start: 4
+      bit_length: 1
+      data_range: 0 ~ 1
+      ref_range: 0 ~ 1
+      scaling: null
+      offset: 0
+      unit: ''
+      remark: 0=无命令，1=执行命令
+      min: 0
+      max: 1
+      position_note: byte filled from previous Byte position in Word table
+      enum_id: 5
+      r/w: w
+    - name: 关闭CAN拓展输出
+      position_raw: Byte 1 bit 4
+      byte_start: 0
+      byte_length: 1
+      bit_start: 3
+      bit_length: 1
+      data_range: 0 ~ 1
+      ref_range: 0 ~ 1
+      scaling: null
+      offset: 0
+      unit: ''
+      remark: 0=无命令，1=执行命令
+      min: 0
+      max: 1
+      position_note: byte filled from previous Byte position in Word table
+      enum_id: 5
+      r/w: w
+    - name: 开启CAN拓展输出
+      position_raw: Byte 1 bit 3
+      byte_start: 0
+      byte_length: 1
+      bit_start: 2
+      bit_length: 1
+      data_range: 0 ~ 1
+      ref_range: 0 ~ 1
+      scaling: null
+      offset: 0
+      unit: ''
+      remark: 0=无命令，1=执行命令
+      min: 0
+      max: 1
+      position_note: byte filled from previous Byte position in Word table
+      enum_id: 5
+      r/w: w
+    - name: 关闭DEBUG模式
+      position_raw: Byte 1 bit 2
+      byte_start: 0
+      byte_length: 1
+      bit_start: 1
+      bit_length: 1
+      data_range: 0 ~ 1
+      ref_range: 0 ~ 1
+      scaling: null
+      offset: 0
+      unit: ''
+      remark: 0=无命令，1=执行命令
+      min: 0
+      max: 1
+      position_note: byte filled from previous Byte position in Word table
+      enum_id: 5
+      r/w: w
+    - name: 开启DEBUG模式
+      position_raw: Byte 1 bit 1
+      byte_start: 0
+      byte_length: 1
+      bit_start: 0
+      bit_length: 1
+      data_range: 0 ~ 1
+      ref_range: 0 ~ 1
+      scaling: null
+      offset: 0
+      unit: ''
+      remark: 0=无命令，1=执行命令
+      min: 0
+      max: 1
+      position_note: byte filled from previous Byte position in Word table
+      enum_id: 5
+      r/w: w
+    - name: 关闭自动标定模式
+      position_raw: Byte 2 bit 8
+      byte_start: 1
+      byte_length: 1
+      bit_start: 7
+      bit_length: 1
+      data_range: 0 ~ 1
+      ref_range: 0 ~ 1
+      scaling: null
+      offset: 0
+      unit: ''
+      remark: 0=无命令，1=执行命令
+      min: 0
+      max: 1
+      enum_id: 5
+      r/w: ''
+    - name: 开启自动标定模式
+      position_raw: Byte 2 bit 7
+      byte_start: 1
+      byte_length: 1
+      bit_start: 6
+      bit_length: 1
+      data_range: 0 ~ 1
+      ref_range: 0 ~ 1
+      scaling: null
+      offset: 0
+      unit: ''
+      remark: 0=无命令，1=执行命令
+      min: 0
+      max: 1
+      position_note: byte filled from previous Byte position in Word table
+      enum_id: 5
+      r/w: ''
+    - name: 未定义
+      position_raw: Byte 2 bit 6~3
+      byte_start: 1
+      byte_length: 1
+      bit_start: 2
+      bit_length: 4
+      data_range: ''
+      ref_range: ''
+      scaling: null
+      offset: null
+      unit: ''
+      remark: ''
+      position_note: byte filled from previous Byte position in Word table
+      enum_id: 0
+      r/w: ''
+    - name: 关闭比例阀调试模式
+      position_raw: Byte 2 bit 2
+      byte_start: 1
+      byte_length: 1
+      bit_start: 1
+      bit_length: 1
+      data_range: ''
+      ref_range: ''
+      scaling: null
+      offset: null
+      unit: ''
+      remark: ''
+      position_note: byte filled from previous Byte position in Word table
+      enum_id: 0
+      r/w: ''
+    - name: 开启比例阀调试模式
+      position_raw: Byte 2 bit 1
+      byte_start: 1
+      byte_length: 1
+      bit_start: 0
+      bit_length: 1
+      data_range: ''
+      ref_range: ''
+      scaling: null
+      offset: null
+      unit: ''
+      remark: ''
+      position_note: byte filled from previous Byte position in Word table
+      enum_id: 0
+      r/w: ''
+    - name: 未定义
+      position_raw: Byte 3~8
+      byte_start: 2
+      byte_length: 6
+      bit_start: 0
+      bit_length: 48
+      data_range: 0 ~ 1
+      ref_range: 0 ~ 1
+      scaling: null
+      offset: 0
+      unit: ''
+      remark: 0=无命令，1=执行命令
+      min: 0
+      max: 1
+      enum_id: 0
+      r/w: ''
+  '0x1851':
+    priority: '0x06'
+    source_authority: word
+    channel: CAN1
+    interval: 200
+    elements:
+    - name: 关闭变速箱外部控制
+      position_raw: Byte 1 bit 8
+      byte_start: 0
+      byte_length: 1
+      bit_start: 7
+      bit_length: 1
+      data_range: 0 ~ 1
+      ref_range: 0 ~ 1
+      scaling: null
+      offset: 0
+      unit: ''
+      remark: 0=无命令，1=执行命令
+      min: 0
+      max: 1
+      enum_id: 5
+      r/w: w
+    - name: 开启变速箱外部控制
+      position_raw: Byte 1 bit 7
+      byte_start: 0
+      byte_length: 1
+      bit_start: 6
+      bit_length: 1
+      data_range: 0 ~ 1
+      ref_range: 0 ~ 1
+      scaling: null
+      offset: 0
+      unit: ''
+      remark: 0=无命令，1=执行命令
+      min: 0
+      max: 1
+      position_note: byte filled from previous Byte position in Word table
+      enum_id: 5
+      r/w: w
+    - name: 关闭离合器默认低档
+      position_raw: Byte 1 bit 6
+      byte_start: 0
+      byte_length: 1
+      bit_start: 5
+      bit_length: 1
+      data_range: 0 ~ 1
+      ref_range: 0 ~ 1
+      scaling: null
+      offset: 0
+      unit: ''
+      remark: 0=无命令，1=执行命令
+      min: 0
+      max: 1
+      position_note: byte filled from previous Byte position in Word table
+      enum_id: 5
+      r/w: w
+    - name: 开启离合器默认低档
+      position_raw: Byte 1 bit 5
+      byte_start: 0
+      byte_length: 1
+      bit_start: 4
+      bit_length: 1
+      data_range: 0 ~ 1
+      ref_range: 0 ~ 1
+      scaling: null
+      offset: 0
+      unit: ''
+      remark: 0=无命令，1=执行命令
+      min: 0
+      max: 1
+      position_note: byte filled from previous Byte position in Word table
+      enum_id: 5
+      r/w: w
+    - name: 未定义
+      position_raw: Byte 1 bit 4~1
+      byte_start: 0
+      byte_length: 1
+      bit_start: 0
+      bit_length: 4
+      data_range: ''
+      ref_range: ''
+      scaling: null
+      offset: null
+      unit: ''
+      remark: ''
+      position_note: byte filled from previous Byte position in Word table
+      enum_id: 0
+      r/w: ''
+    - name: 关闭离合器打滑检测
+      position_raw: Byte 2 bit 8
+      byte_start: 1
+      byte_length: 1
+      bit_start: 7
+      bit_length: 1
+      data_range: 0 ~ 1
+      ref_range: 0 ~ 1
+      scaling: null
+      offset: 0
+      unit: ''
+      remark: 0=无命令，1=执行命令
+      min: 0
+      max: 1
+      enum_id: 5
+      r/w: w
+    - name: 开启离合器打滑检测
+      position_raw: Byte 2 bit 7
+      byte_start: 1
+      byte_length: 1
+      bit_start: 6
+      bit_length: 1
+      data_range: 0 ~ 1
+      ref_range: 0 ~ 1
+      scaling: null
+      offset: 0
+      unit: ''
+      remark: 0=无命令，1=执行命令
+      min: 0
+      max: 1
+      position_note: byte filled from previous Byte position in Word table
+      enum_id: 5
+      r/w: w
+    - name: 关闭离合踏板功能
+      position_raw: Byte 2 bit 6
+      byte_start: 1
+      byte_length: 1
+      bit_start: 5
+      bit_length: 1
+      data_range: 0 ~ 1
+      ref_range: 0 ~ 1
+      scaling: null
+      offset: 0
+      unit: ''
+      remark: 0=无命令，1=执行命令
+      min: 0
+      max: 1
+      position_note: byte filled from previous Byte position in Word table
+      enum_id: 5
+      r/w: w
+    - name: 开启离合踏板功能
+      position_raw: Byte 2 bit 5
+      byte_start: 1
+      byte_length: 1
+      bit_start: 4
+      bit_length: 1
+      data_range: 0 ~ 1
+      ref_range: 0 ~ 1
+      scaling: null
+      offset: 0
+      unit: ''
+      remark: 0=无命令，1=执行命令
+      min: 0
+      max: 1
+      position_note: byte filled from previous Byte position in Word table
+      enum_id: 5
+      r/w: w
+    - name: 未定义
+      position_raw: Byte 2 bit 4~1
+      byte_start: 1
+      byte_length: 1
+      bit_start: 0
+      bit_length: 4
+      data_range: ''
+      ref_range: ''
+      scaling: null
+      offset: null
+      unit: ''
+      remark: ''
+      position_note: byte filled from previous Byte position in Word table
+      enum_id: 0
+      r/w: ''
+    - name: 未定义
+      position_raw: Byte 3 bit 8~3
+      byte_start: 2
+      byte_length: 1
+      bit_start: 2
+      bit_length: 6
+      data_range: ''
+      ref_range: ''
+      scaling: null
+      offset: null
+      unit: ''
+      remark: ''
+      enum_id: 0
+      r/w: ''
+    - name: 关闭比例阀颤震开关
+      position_raw: Byte 3 bit 2
+      byte_start: 2
+      byte_length: 1
+      bit_start: 1
+      bit_length: 1
+      data_range: 0 ~ 1
+      ref_range: 0 ~ 1
+      scaling: null
+      offset: 0
+      unit: ''
+      remark: 0=无命令，1=执行命令
+      min: 0
+      max: 1
+      position_note: byte filled from previous Byte position in Word table
+      enum_id: 5
+      r/w: ''
+    - name: 开启比例阀颤振开关
+      position_raw: Byte 3 bit 1
+      byte_start: 2
+      byte_length: 1
+      bit_start: 0
+      bit_length: 1
+      data_range: 0 ~ 1
+      ref_range: 0 ~ 1
+      scaling: null
+      offset: 0
+      unit: ''
+      remark: 0=无命令，1=执行命令
+      min: 0
+      max: 1
+      position_note: byte filled from previous Byte position in Word table
+      enum_id: 5
+      r/w: ''
+    - name: 关闭PTO外部控制
+      position_raw: Byte 4 bit 8
+      byte_start: 3
+      byte_length: 1
+      bit_start: 7
+      bit_length: 1
+      data_range: 0 ~ 1
+      ref_range: 0 ~ 1
+      scaling: null
+      offset: 0
+      unit: ''
+      remark: 0=无命令，1=执行命令
+      min: 0
+      max: 1
+      enum_id: 5
+      r/w: w
+    - name: 开启PTO外部控制
+      position_raw: Byte 4 bit 7
+      byte_start: 3
+      byte_length: 1
+      bit_start: 6
+      bit_length: 1
+      data_range: 0 ~ 1
+      ref_range: 0 ~ 1
+      scaling: null
+      offset: 0
+      unit: ''
+      remark: 0=无命令，1=执行命令
+      min: 0
+      max: 1
+      position_note: byte filled from previous Byte position in Word table
+      enum_id: 5
+      r/w: w
+    - name: 关闭PTO倒车锁
+      position_raw: Byte 4 bit 6
+      byte_start: 3
+      byte_length: 1
+      bit_start: 5
+      bit_length: 1
+      data_range: 0 ~ 1
+      ref_range: 0 ~ 1
+      scaling: null
+      offset: 0
+      unit: ''
+      remark: 0=无命令，1=执行命令
+      min: 0
+      max: 1
+      position_note: byte filled from previous Byte position in Word table
+      enum_id: 5
+      r/w: w
+    - name: 开启PTO倒车锁
+      position_raw: Byte 4 bit 5
+      byte_start: 3
+      byte_length: 1
+      bit_start: 4
+      bit_length: 1
+      data_range: 0 ~ 1
+      ref_range: 0 ~ 1
+      scaling: null
+      offset: 0
+      unit: ''
+      remark: 0=无命令，1=执行命令
+      min: 0
+      max: 1
+      position_note: byte filled from previous Byte position in Word table
+      enum_id: 5
+      r/w: w
+    - name: 未定义
+      position_raw: Byte 4 bit 4~1
+      byte_start: 3
+      byte_length: 1
+      bit_start: 0
+      bit_length: 4
+      data_range: ''
+      ref_range: ''
+      scaling: null
+      offset: null
+      unit: ''
+      remark: ''
+      position_note: byte filled from previous Byte position in Word table
+      enum_id: 0
+      r/w: ''
+    - name: 关闭制动动力切断
+      position_raw: Byte 5 bit 8
+      byte_start: 4
+      byte_length: 1
+      bit_start: 7
+      bit_length: 1
+      data_range: 0 ~ 1
+      ref_range: 0 ~ 1
+      scaling: null
+      offset: 0
+      unit: ''
+      remark: 0=无命令，1=执行命令
+      min: 0
+      max: 1
+      enum_id: 5
+      r/w: w
+    - name: 开启制动动力切断
+      position_raw: Byte 5 bit 7
+      byte_start: 4
+      byte_length: 1
+      bit_start: 6
+      bit_length: 1
+      data_range: 0 ~ 1
+      ref_range: 0 ~ 1
+      scaling: null
+      offset: 0
+      unit: ''
+      remark: 0=无命令，1=执行命令
+      min: 0
+      max: 1
+      position_note: byte filled from previous Byte position in Word table
+      enum_id: 5
+      r/w: w
+    - name: 关闭单按钮控制HiLo
+      position_raw: Byte 6 bit 8
+      byte_start: 5
+      byte_length: 1
+      bit_start: 7
+      bit_length: 1
+      data_range: 0 ~ 1
+      ref_range: 0 ~ 1
+      scaling: null
+      offset: 0
+      unit: ''
+      remark: 0=无命令，1=执行命令
+      min: 0
+      max: 1
+      enum_id: 5
+      r/w: w
+    - name: 开启单按钮控制HiLo
+      position_raw: Byte 6 bit 7
+      byte_start: 5
+      byte_length: 1
+      bit_start: 6
+      bit_length: 1
+      data_range: 0 ~ 1
+      ref_range: 0 ~ 1
+      scaling: null
+      offset: 0
+      unit: ''
+      remark: 0=无命令，1=执行命令
+      min: 0
+      max: 1
+      position_note: byte filled from previous Byte position in Word table
+      enum_id: 5
+      r/w: w
+    - name: 关闭负载旋钮功能
+      position_raw: Byte 6 bit 6
+      byte_start: 5
+      byte_length: 1
+      bit_start: 5
+      bit_length: 1
+      data_range: 0 ~ 1
+      ref_range: 0 ~ 1
+      scaling: null
+      offset: 0
+      unit: ''
+      remark: 0=无命令，1=执行命令
+      min: 0
+      max: 1
+      position_note: byte filled from previous Byte position in Word table
+      enum_id: 5
+      r/w: w
+    - name: 开启负载旋钮功能
+      position_raw: Byte 6 bit 5
+      byte_start: 5
+      byte_length: 1
+      bit_start: 4
+      bit_length: 1
+      data_range: 0 ~ 1
+      ref_range: 0 ~ 1
+      scaling: null
+      offset: 0
+      unit: ''
+      remark: 0=无命令，1=执行命令
+      min: 0
+      max: 1
+      position_note: byte filled from previous Byte position in Word table
+      enum_id: 5
+      r/w: w
+    - name: 关闭高低档功能
+      position_raw: Byte 6 bit 4
+      byte_start: 5
+      byte_length: 1
+      bit_start: 3
+      bit_length: 1
+      data_range: 0 ~ 1
+      ref_range: 0 ~ 1
+      scaling: null
+      offset: 0
+      unit: ''
+      remark: 0=无命令，1=执行命令
+      min: 0
+      max: 1
+      position_note: byte filled from previous Byte position in Word table
+      enum_id: 5
+      r/w: ''
+    - name: 开启高低档功能
+      position_raw: Byte 6 bit 3
+      byte_start: 5
+      byte_length: 1
+      bit_start: 2
+      bit_length: 1
+      data_range: 0 ~ 1
+      ref_range: 0 ~ 1
+      scaling: null
+      offset: 0
+      unit: ''
+      remark: 0=无命令，1=执行命令
+      min: 0
+      max: 1
+      position_note: byte filled from previous Byte position in Word table
+      enum_id: 5
+      r/w: ''
+    - name: 未定义
+      position_raw: Byte 6 bit 2~1
+      byte_start: 5
+      byte_length: 1
+      bit_start: 0
+      bit_length: 2
+      data_range: ''
+      ref_range: ''
+      scaling: null
+      offset: null
+      unit: ''
+      remark: ''
+      position_note: byte filled from previous Byte position in Word table
+      enum_id: 0
+      r/w: ''
+  '0x1860':
+    priority: '0x06'
+    source_authority: word
+    channel: CAN1
+    interval: 200
+    elements:
+    - name: 设置主机厂家
+      position_raw: Byte 1~2
+      byte_start: 0
+      byte_length: 2
+      bit_start: 0
+      bit_length: 16
+      data_range: ''
+      ref_range: ''
+      scaling: null
+      offset: null
+      unit: ''
+      remark: ''
+      enum_id: 0
+      r/w: w
+    - name: 设置产品型号
+      position_raw: Byte 3
+      byte_start: 2
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: ''
+      ref_range: ''
+      scaling: null
+      offset: null
+      unit: ''
+      remark: ''
+      enum_id: 0
+      r/w: ''
+    - name: 设置变速箱厂家
+      position_raw: Byte 4
+      byte_start: 3
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: ''
+      ref_range: ''
+      scaling: null
+      offset: null
+      unit: ''
+      remark: ''
+      enum_id: 0
+      r/w: ''
+    - name: 设置硬件版本
+      position_raw: Byte 5
+      byte_start: 4
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: ''
+      ref_range: ''
+      scaling: null
+      offset: null
+      unit: ''
+      remark: ''
+      enum_id: 0
+      r/w: w
+    - name: 未定义
+      position_raw: Byte 6~8
+      byte_start: 5
+      byte_length: 3
+      bit_start: 0
+      bit_length: 24
+      data_range: ''
+      ref_range: ''
+      scaling: null
+      offset: null
+      unit: ''
+      remark: ''
+      enum_id: 0
+      r/w: ''
+    - name: 产品型号
+      position_raw: Byte 3~4
+      byte_start: 2
+      byte_length: 2
+      bit_start: 0
+      bit_length: 16
+      enum_id: 0
+      data_range: ''
+      ref_range: ''
+      scaling: 1
+      offset: 0
+      unit: ''
+      remark: TODO
+      r/w: w
+    - name: 硬件版本
+      position_raw: Byte 6
+      byte_start: 5
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: ''
+      ref_range: ''
+      scaling: 1
+      offset: 0
+      unit: ''
+      remark: TODO
+      r/w: w
+    - name: 软件版本
+      position_raw: Byte 7~8
+      byte_start: 6
+      byte_length: 2
+      bit_start: 0
+      bit_length: 16
+      enum_id: 0
+      data_range: ''
+      ref_range: ''
+      scaling: 1
+      offset: 0
+      unit: ''
+      remark: TODO
+      r/w: w
+  '0x1862':
+    priority: '0x06'
+    source_authority: word
+    channel: CAN1
+    interval: 200
+    elements:
+    - name: 设置离合器前齿数
+      position_raw: Byte 1~2
+      byte_start: 0
+      byte_length: 2
+      bit_start: 0
+      bit_length: 16
+      data_range: 0 ~ 1000
+      ref_range: 0 ~ 1000
+      scaling: 1
+      offset: 0
+      unit: ''
+      remark: 1/bit
+      min: 0
+      max: 1000
+      enum_id: 0
+      r/w: w
+    - name: 设置离合器前速比
+      position_raw: Byte 3~4
+      byte_start: 2
+      byte_length: 2
+      bit_start: 0
+      bit_length: 16
+      data_range: ''
+      ref_range: ''
+      scaling: null
+      offset: null
+      unit: ''
+      remark: ''
+      enum_id: 0
+      r/w: ''
+    - name: 设置离合器后齿数
+      position_raw: Byte 5~6
+      byte_start: 4
+      byte_length: 2
+      bit_start: 0
+      bit_length: 16
+      data_range: 0 ~ 1000
+      ref_range: 0 ~ 1000
+      scaling: 1
+      offset: 0
+      unit: ''
+      remark: 1/bit
+      min: 0
+      max: 1000
+      enum_id: 0
+      r/w: w
+    - name: 设置离合器后速比
+      position_raw: Byte 7~8
+      byte_start: 6
+      byte_length: 2
+      bit_start: 0
+      bit_length: 16
+      data_range: ''
+      ref_range: ''
+      scaling: null
+      offset: null
+      unit: ''
+      remark: ''
+      enum_id: 0
+      r/w: ''
+  '0x1863':
+    priority: '0x06'
+    source_authority: word
+    channel: CAN1
+    interval: 200
+    elements:
+    - name: 设置PTO处齿数
+      position_raw: Byte 1~2
+      byte_start: 0
+      byte_length: 2
+      bit_start: 0
+      bit_length: 16
+      data_range: 0 ~ 1000
+      ref_range: 0 ~ 1000
+      scaling: 1
+      offset: 0
+      unit: ''
+      remark: 1/bit
+      min: 0
+      max: 1000
+      enum_id: 0
+      r/w: w
+    - name: 设置PTO处速比
+      position_raw: Byte 3~4
+      byte_start: 2
+      byte_length: 2
+      bit_start: 0
+      bit_length: 16
+      data_range: ''
+      ref_range: ''
+      scaling: null
+      offset: null
+      unit: ''
+      remark: ''
+      enum_id: 0
+      r/w: ''
+    - name: 未定义
+      position_raw: Byte 5~8
+      byte_start: 4
+      byte_length: 4
+      bit_start: 0
+      bit_length: 32
+      data_range: ''
+      ref_range: ''
+      scaling: null
+      offset: null
+      unit: ''
+      remark: ''
+      enum_id: 0
+      r/w: ''
+  '0x1880':
+    priority: '0x06'
+    source_authority: word
+    channel: CAN1
+    interval: 200
+    elements:
+    - name: 高档空载点1X请求
+      position_raw: Byte 1
+      byte_start: 0
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: 0 ~ 1250
+      ref_range: 0 ~ 1250
+      scaling: 5
+      offset: 0
+      unit: ms
+      remark: 5/bit，大于0xFA无效
+      min: 0
+      max: 1250
+      enum_id: 0
+      r/w: w
+    - name: 高档空载点1Y请求
+      position_raw: Byte 2
+      byte_start: 1
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: 0 ~ 100
+      ref_range: 0 ~ 100
+      scaling: 0.4
+      offset: 0
+      unit: '%'
+      remark: 0.4/bit，大于0xFA无效
+      min: 0
+      max: 100
+      enum_id: 0
+      r/w: w
+      precision: 1
+    - name: 高档空载点2X请求
+      position_raw: Byte 3
+      byte_start: 2
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: 0 ~ 1250
+      ref_range: 0 ~ 1250
+      scaling: 5
+      offset: 0
+      unit: ms
+      remark: 5/bit，大于0xFA无效
+      min: 0
+      max: 1250
+      enum_id: 0
+      r/w: w
+    - name: 高档空载点2Y请求
+      position_raw: Byte 4
+      byte_start: 3
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: 0 ~ 25
+      ref_range: 0 ~ 25
+      scaling: 0.1
+      offset: 0
+      unit: '%'
+      remark: 0.1/bit，大于0xFA无效
+      min: 0
+      max: 25
+      enum_id: 0
+      r/w: w
+      precision: 1
+    - name: 高档空载点3X请求
+      position_raw: Byte 5
+      byte_start: 4
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: 0 ~ 2500
+      ref_range: 0 ~ 2500
+      scaling: 10
+      offset: 0
+      unit: ms
+      remark: 10/bit，大于0xFA无效
+      min: 0
+      max: 2500
+      enum_id: 0
+      r/w: w
+    - name: 高档空载点3Y请求
+      position_raw: Byte 6
+      byte_start: 5
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: 0 ~ 25
+      ref_range: 0 ~ 25
+      scaling: 0.1
+      offset: 0
+      unit: '%'
+      remark: 0.1/bit，大于0xFA无效
+      min: 0
+      max: 25
+      enum_id: 0
+      r/w: w
+      precision: 1
+    - name: 高档空载点4X请求
+      position_raw: Byte 7
+      byte_start: 6
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: 0 ~ 6250
+      ref_range: 0 ~ 6250
+      scaling: 25
+      offset: 0
+      unit: ms
+      remark: 25/bit，大于0xFA无效
+      min: 0
+      max: 6250
+      enum_id: 0
+      r/w: w
+    - name: 高档空载点4Y请求
+      position_raw: Byte 8
+      byte_start: 7
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: 0 ~ 50
+      ref_range: 0 ~ 50
+      scaling: 0.2
+      offset: 0
+      unit: '%'
+      remark: 0.2/bit，大于0xFA无效
+      min: 0
+      max: 50
+      enum_id: 0
+      r/w: w
+      precision: 1
+  '0x1881':
+    priority: '0x06'
+    source_authority: word
+    channel: CAN1
+    interval: 200
+    elements:
+    - name: 高档空载点5X请求
+      position_raw: Byte 1
+      byte_start: 0
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: 0 ~ 6250
+      ref_range: 0 ~ 6250
+      scaling: 25
+      offset: 0
+      unit: ms
+      remark: 25/bit，大于0xFA无效
+      min: 0
+      max: 6250
+      enum_id: 0
+      r/w: w
+    - name: 高档空载点5Y请求
+      position_raw: Byte 2
+      byte_start: 1
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: 0 ~ 100
+      ref_range: 0 ~ 100
+      scaling: 0.4
+      offset: 0
+      unit: '%'
+      remark: 0.4/bit，大于0xFA无效
+      min: 0
+      max: 100
+      enum_id: 0
+      r/w: w
+    - name: 高档空载点6X
+      position_raw: Byte 3
+      byte_start: 2
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 6250
+      ref_range: 0 ~ 6250
+      scaling: 25
+      offset: 0
+      unit: ms
+      remark: 25/bit，大于0xFA无效
+      min: 0
+      max: 6250
+      r/w: w
+    - name: 高档空载点6Y
+      position_raw: Byte 4
+      byte_start: 3
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 100
+      ref_range: 0 ~ 100
+      scaling: 0.4
+      offset: 0
+      unit: '%'
+      remark: 0.4/bit，大于0xFA无效
+      min: 0
+      max: 100
+      r/w: w
+    - name: 高档空载点7X
+      position_raw: Byte 5
+      byte_start: 4
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 6250
+      ref_range: 0 ~ 6250
+      scaling: 25
+      offset: 0
+      unit: ms
+      remark: 25/bit，大于0xFA无效
+      min: 0
+      max: 6250
+      r/w: w
+    - name: 高档空载点7Y
+      position_raw: Byte 6
+      byte_start: 5
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 100
+      ref_range: 0 ~ 100
+      scaling: 0.4
+      offset: 0
+      unit: '%'
+      remark: 0.4/bit，大于0xFA无效
+      min: 0
+      max: 100
+      r/w: w
+    - name: 高档空载点8X
+      position_raw: Byte 7
+      byte_start: 6
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 6250
+      ref_range: 0 ~ 6250
+      scaling: 25
+      offset: 0
+      unit: ms
+      remark: 25/bit，大于0xFA无效
+      min: 0
+      max: 6250
+      r/w: w
+    - name: 高档空载点8Y
+      position_raw: Byte 8
+      byte_start: 7
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 100
+      ref_range: 0 ~ 100
+      scaling: 0.4
+      offset: 0
+      unit: '%'
+      remark: 0.4/bit，大于0xFA无效
+      min: 0
+      max: 100
+      r/w: w
+  '0x1882':
+    priority: '0x06'
+    source_authority: word
+    channel: CAN1
+    interval: 200
+    elements:
+    - name: 低档空载点1X请求
+      position_raw: Byte 1
+      byte_start: 0
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: 0 ~ 1250
+      ref_range: 0 ~ 1250
+      scaling: 5
+      offset: 0
+      unit: ms
+      remark: 5/bit，大于0xFA无效
+      min: 0
+      max: 1250
+      enum_id: 0
+      r/w: w
+    - name: 低档空载点1Y请求
+      position_raw: Byte 2
+      byte_start: 1
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: 0 ~ 100
+      ref_range: 0 ~ 100
+      scaling: 0.4
+      offset: 0
+      unit: '%'
+      remark: 0.4/bit，大于0xFA无效
+      min: 0
+      max: 100
+      enum_id: 0
+      r/w: w
+    - name: 低档空载点2X
+      position_raw: Byte 3
+      byte_start: 2
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 1250
+      ref_range: 0 ~ 1250
+      scaling: 5
+      offset: 0
+      unit: ms
+      remark: 5/bit，大于0xFA无效
+      min: 0
+      max: 1250
+      r/w: w
+    - name: 低档空载点2Y
+      position_raw: Byte 4
+      byte_start: 3
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 25
+      ref_range: 0 ~ 25
+      scaling: 0.1
+      offset: 0
+      unit: '%'
+      remark: 0.1/bit，大于0xFA无效
+      min: 0
+      max: 25
+      r/w: w
+    - name: 低档空载点3X
+      position_raw: Byte 5
+      byte_start: 4
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 2500
+      ref_range: 0 ~ 2500
+      scaling: 10
+      offset: 0
+      unit: ms
+      remark: 10/bit，大于0xFA无效
+      min: 0
+      max: 2500
+      r/w: w
+    - name: 低档空载点3Y
+      position_raw: Byte 6
+      byte_start: 5
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 25
+      ref_range: 0 ~ 25
+      scaling: 0.1
+      offset: 0
+      unit: '%'
+      remark: 0.1/bit，大于0xFA无效
+      min: 0
+      max: 25
+      r/w: w
+    - name: 低档空载点4X
+      position_raw: Byte 7
+      byte_start: 6
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 6250
+      ref_range: 0 ~ 6250
+      scaling: 25
+      offset: 0
+      unit: ms
+      remark: 25/bit，大于0xFA无效
+      min: 0
+      max: 6250
+      r/w: w
+    - name: 低档空载点4Y
+      position_raw: Byte 8
+      byte_start: 7
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 50
+      ref_range: 0 ~ 50
+      scaling: 0.2
+      offset: 0
+      unit: '%'
+      remark: 0.2/bit，大于0xFA无效
+      min: 0
+      max: 50
+      r/w: w
+  '0x1883':
+    priority: '0x06'
+    source_authority: word
+    channel: CAN1
+    interval: 200
+    elements:
+    - name: 低档空载点5X请求
+      position_raw: Byte 1
+      byte_start: 0
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: 0 ~ 6250
+      ref_range: 0 ~ 6250
+      scaling: 25
+      offset: 0
+      unit: ms
+      remark: 25/bit，大于0xFA无效
+      enum_id: 0
+      r/w: w
+      min: 0
+      max: 6250
+    - name: 低档空载点5Y请求
+      position_raw: Byte 2
+      byte_start: 1
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: 0 ~ 100
+      ref_range: 0 ~ 100
+      scaling: 0.4
+      offset: 0
+      unit: '%'
+      remark: 0.4/bit，大于0xFA无效
+      min: 0
+      max: 100
+      enum_id: 0
+      r/w: w
+    - name: 低档空载点6X
+      position_raw: Byte 3
+      byte_start: 2
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 6250
+      ref_range: 0 ~ 6250
+      scaling: 25
+      offset: 0
+      unit: ms
+      remark: 25/bit，大于0xFA无效
+      min: 0
+      max: 6250
+      r/w: w
+    - name: 低档空载点6Y
+      position_raw: Byte 4
+      byte_start: 3
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 100
+      ref_range: 0 ~ 100
+      scaling: 0.4
+      offset: 0
+      unit: '%'
+      remark: 0.4/bit，大于0xFA无效
+      min: 0
+      max: 100
+      r/w: w
+    - name: 低档空载点7X
+      position_raw: Byte 5
+      byte_start: 4
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 6250
+      ref_range: 0 ~ 6250
+      scaling: 25
+      offset: 0
+      unit: ms
+      remark: 25/bit，大于0xFA无效
+      min: 0
+      max: 6250
+      r/w: w
+    - name: 低档空载点7Y
+      position_raw: Byte 6
+      byte_start: 5
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 100
+      ref_range: 0 ~ 100
+      scaling: 0.4
+      offset: 0
+      unit: '%'
+      remark: 0.4/bit，大于0xFA无效
+      min: 0
+      max: 100
+      r/w: w
+    - name: 低档空载点8X
+      position_raw: Byte 7
+      byte_start: 6
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 6250
+      ref_range: 0 ~ 6250
+      scaling: 25
+      offset: 0
+      unit: ms
+      remark: 25/bit，大于0xFA无效
+      min: 0
+      max: 6250
+      r/w: w
+    - name: 低档空载点8Y
+      position_raw: Byte 8
+      byte_start: 7
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 100
+      ref_range: 0 ~ 100
+      scaling: 0.4
+      offset: 0
+      unit: '%'
+      remark: 0.4/bit，大于0xFA无效
+      min: 0
+      max: 100
+      r/w: w
+  '0x1884':
+    priority: '0x06'
+    source_authority: word
+    channel: CAN1
+    interval: 200
+    elements:
+    - name: 倒档空载点1X请求
+      position_raw: Byte 1
+      byte_start: 0
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: 0 ~ 1250
+      ref_range: 0 ~ 1250
+      scaling: 5
+      offset: 0
+      unit: ms
+      remark: 5/bit，大于0xFA无效
+      min: 0
+      max: 1250
+      enum_id: 0
+      r/w: w
+    - name: 倒档空载点1Y请求
+      position_raw: Byte 2
+      byte_start: 1
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: 0 ~ 100
+      ref_range: 0 ~ 100
+      scaling: 0.4
+      offset: 0
+      unit: '%'
+      remark: 0.4/bit，大于0xFA无效
+      min: 0
+      max: 100
+      enum_id: 0
+      r/w: w
+    - name: 倒档空载点2X
+      position_raw: Byte 3
+      byte_start: 2
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 1250
+      ref_range: 0 ~ 1250
+      scaling: 5
+      offset: 0
+      unit: ms
+      remark: 5/bit，大于0xFA无效
+      min: 0
+      max: 1250
+      r/w: w
+    - name: 倒档空载点2Y
+      position_raw: Byte 4
+      byte_start: 3
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 25
+      ref_range: 0 ~ 25
+      scaling: 0.1
+      offset: 0
+      unit: '%'
+      remark: 0.1/bit，大于0xFA无效
+      min: 0
+      max: 25
+      r/w: w
+    - name: 倒档空载点3X
+      position_raw: Byte 5
+      byte_start: 4
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 2500
+      ref_range: 0 ~ 2500
+      scaling: 10
+      offset: 0
+      unit: ms
+      remark: 10/bit，大于0xFA无效
+      min: 0
+      max: 2500
+      r/w: w
+    - name: 倒档空载点3Y
+      position_raw: Byte 6
+      byte_start: 5
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 25
+      ref_range: 0 ~ 25
+      scaling: 0.1
+      offset: 0
+      unit: '%'
+      remark: 0.1/bit，大于0xFA无效
+      min: 0
+      max: 25
+      r/w: w
+    - name: 倒档空载点4X
+      position_raw: Byte 7
+      byte_start: 6
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 6250
+      ref_range: 0 ~ 6250
+      scaling: 25
+      offset: 0
+      unit: ms
+      remark: 25/bit，大于0xFA无效
+      min: 0
+      max: 6250
+      r/w: w
+    - name: 倒档空载点4Y
+      position_raw: Byte 8
+      byte_start: 7
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 50
+      ref_range: 0 ~ 50
+      scaling: 0.2
+      offset: 0
+      unit: '%'
+      remark: 0.2/bit，大于0xFA无效
+      min: 0
+      max: 50
+      r/w: w
+  '0x1885':
+    priority: '0x06'
+    source_authority: word
+    channel: CAN1
+    interval: 200
+    elements:
+    - name: 倒档空载点5X请求
+      position_raw: Byte 1
+      byte_start: 0
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: 0 ~ 6250
+      ref_range: 0 ~ 6250
+      scaling: 25
+      offset: 0
+      unit: ms
+      remark: 25/bit，大于0xFA无效
+      enum_id: 0
+      r/w: w
+      min: 0
+      max: 6250
+    - name: 倒档空载点5Y请求
+      position_raw: Byte 2
+      byte_start: 1
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: 0 ~ 100
+      ref_range: 0 ~ 100
+      scaling: 0.4
+      offset: 0
+      unit: '%'
+      remark: 0.4/bit，大于0xFA无效
+      min: 0
+      max: 100
+      enum_id: 0
+      r/w: w
+    - name: 倒档空载点6X
+      position_raw: Byte 3
+      byte_start: 2
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 6250
+      ref_range: 0 ~ 6250
+      scaling: 25
+      offset: 0
+      unit: ms
+      remark: 25/bit，大于0xFA无效
+      min: 0
+      max: 6250
+      r/w: w
+    - name: 倒档空载点6Y
+      position_raw: Byte 4
+      byte_start: 3
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 100
+      ref_range: 0 ~ 100
+      scaling: 0.4
+      offset: 0
+      unit: '%'
+      remark: 0.4/bit，大于0xFA无效
+      min: 0
+      max: 100
+      r/w: w
+    - name: 倒档空载点7X
+      position_raw: Byte 5
+      byte_start: 4
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 6250
+      ref_range: 0 ~ 6250
+      scaling: 25
+      offset: 0
+      unit: ms
+      remark: 25/bit，大于0xFA无效
+      min: 0
+      max: 6250
+      r/w: w
+    - name: 倒档空载点7Y
+      position_raw: Byte 6
+      byte_start: 5
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 100
+      ref_range: 0 ~ 100
+      scaling: 0.4
+      offset: 0
+      unit: '%'
+      remark: 0.4/bit，大于0xFA无效
+      min: 0
+      max: 100
+      r/w: w
+    - name: 倒档空载点8X
+      position_raw: Byte 7
+      byte_start: 6
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 6250
+      ref_range: 0 ~ 6250
+      scaling: 25
+      offset: 0
+      unit: ms
+      remark: 25/bit，大于0xFA无效
+      min: 0
+      max: 6250
+      r/w: w
+    - name: 倒档空载点8Y
+      position_raw: Byte 8
+      byte_start: 7
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 100
+      ref_range: 0 ~ 100
+      scaling: 0.4
+      offset: 0
+      unit: '%'
+      remark: 0.4/bit，大于0xFA无效
+      min: 0
+      max: 100
+      r/w: w
+  '0x1888':
+    priority: '0x06'
+    source_authority: word
+    channel: CAN1
+    interval: 200
+    elements:
+    - name: 高档满载点1X请求
+      position_raw: Byte 1
+      byte_start: 0
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: 0 ~ 1250
+      ref_range: 0 ~ 1250
+      scaling: 5
+      offset: 0
+      unit: ms
+      remark: 5/bit，大于0xFA无效
+      min: 0
+      max: 1250
+      enum_id: 0
+      r/w: w
+    - name: 高档满载点1Y请求
+      position_raw: Byte 2
+      byte_start: 1
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: 0 ~ 50
+      ref_range: 0 ~ 50
+      scaling: 0.2
+      offset: 0
+      unit: '%'
+      remark: 0.2/bit，大于0xFA无效
+      min: 0
+      max: 50
+      enum_id: 0
+      r/w: w
+    - name: H档满载点2X
+      position_raw: Byte 3
+      byte_start: 2
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 1250
+      ref_range: 0 ~ 1250
+      scaling: 5
+      offset: 0
+      unit: ms
+      remark: 5/bit，大于0xFA无效
+      min: 0
+      max: 1250
+      r/w: w
+    - name: H档满载点2Y
+      position_raw: Byte 4
+      byte_start: 3
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 25
+      ref_range: 0 ~ 25
+      scaling: 0.1
+      offset: 0
+      unit: '%'
+      remark: 0.1/bit，大于0xFA无效
+      min: 0
+      max: 25
+      r/w: w
+    - name: H档满载点3X
+      position_raw: Byte 5
+      byte_start: 4
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 2500
+      ref_range: 0 ~ 2500
+      scaling: 10
+      offset: 0
+      unit: ms
+      remark: 10/bit，大于0xFA无效
+      min: 0
+      max: 2500
+      r/w: w
+    - name: H档满载点3Y
+      position_raw: Byte 6
+      byte_start: 5
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 25
+      ref_range: 0 ~ 25
+      scaling: 0.1
+      offset: 0
+      unit: '%'
+      remark: 0.1/bit，大于0xFA无效
+      min: 0
+      max: 25
+      r/w: w
+    - name: H档满载点4X
+      position_raw: Byte 7
+      byte_start: 6
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 6250
+      ref_range: 0 ~ 6250
+      scaling: 25
+      offset: 0
+      unit: ms
+      remark: 25/bit，大于0xFA无效
+      min: 0
+      max: 6250
+      r/w: w
+    - name: H档满载点4Y
+      position_raw: Byte 8
+      byte_start: 7
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 25
+      ref_range: 0 ~ 25
+      scaling: 0.1
+      offset: 0
+      unit: '%'
+      remark: 0.1/bit，大于0xFA无效
+      min: 0
+      max: 25
+      r/w: w
+  '0x1889':
+    priority: '0x06'
+    source_authority: word
+    channel: CAN1
+    interval: 200
+    elements:
+    - name: 高档满载点5X请求
+      position_raw: Byte 1
+      byte_start: 0
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: 0 ~ 6250
+      ref_range: 0 ~ 6250
+      scaling: 25
+      offset: 0
+      unit: ms
+      remark: 25/bit，大于0xFA无效
+      enum_id: 0
+      r/w: w
+      min: 0
+      max: 6250
+    - name: 高档满载点5Y请求
+      position_raw: Byte 2
+      byte_start: 1
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: 0 ~ 25
+      ref_range: 0 ~ 25
+      scaling: 0.1
+      offset: 0
+      unit: '%'
+      remark: 0.1/bit，大于0xFA无效
+      min: 0
+      max: 25
+      enum_id: 0
+      r/w: w
+    - name: H档满载点6X
+      position_raw: Byte 3
+      byte_start: 2
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 6250
+      ref_range: 0 ~ 6250
+      scaling: 25
+      offset: 0
+      unit: ms
+      remark: 25/bit，大于0xFA无效
+      min: 0
+      max: 6250
+      r/w: w
+    - name: H档满载点6Y
+      position_raw: Byte 4
+      byte_start: 3
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 25
+      ref_range: 0 ~ 25
+      scaling: 0.1
+      offset: 0
+      unit: '%'
+      remark: 0.1/bit，大于0xFA无效
+      min: 0
+      max: 25
+      r/w: w
+    - name: H档满载点7X
+      position_raw: Byte 5
+      byte_start: 4
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 6250
+      ref_range: 0 ~ 6250
+      scaling: 25
+      offset: 0
+      unit: ms
+      remark: 25/bit，大于0xFA无效
+      min: 0
+      max: 6250
+      r/w: w
+    - name: H档满载点7Y
+      position_raw: Byte 6
+      byte_start: 5
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 25
+      ref_range: 0 ~ 25
+      scaling: 0.1
+      offset: 0
+      unit: '%'
+      remark: 0.1/bit，大于0xFA无效
+      min: 0
+      max: 25
+      r/w: w
+    - name: H档满载点8X
+      position_raw: Byte 7
+      byte_start: 6
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 6250
+      ref_range: 0 ~ 6250
+      scaling: 25
+      offset: 0
+      unit: ms
+      remark: 25/bit，大于0xFA无效
+      min: 0
+      max: 6250
+      r/w: w
+    - name: H档满载点8Y
+      position_raw: Byte 8
+      byte_start: 7
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 25
+      ref_range: 0 ~ 25
+      scaling: 0.1
+      offset: 0
+      unit: '%'
+      remark: 0.1/bit，大于0xFA无效
+      min: 0
+      max: 25
+      r/w: w
+  '0x188A':
+    priority: '0x06'
+    source_authority: word
+    channel: CAN1
+    interval: 200
+    elements:
+    - name: 低档满载点1X请求
+      position_raw: Byte 1
+      byte_start: 0
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: 0 ~ 1250
+      ref_range: 0 ~ 1250
+      scaling: 5
+      offset: 0
+      unit: ms
+      remark: 5/bit，大于0xFA无效
+      min: 0
+      max: 1250
+      enum_id: 0
+      r/w: w
+    - name: 低档满载点1Y请求
+      position_raw: Byte 2
+      byte_start: 1
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: 0 ~ 50
+      ref_range: 0 ~ 50
+      scaling: 0.2
+      offset: 0
+      unit: '%'
+      remark: 0.2/bit，大于0xFA无效
+      min: 0
+      max: 50
+      enum_id: 0
+      r/w: w
+    - name: 低档满载点2X
+      position_raw: Byte 3
+      byte_start: 2
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 1250
+      ref_range: 0 ~ 1250
+      scaling: 5
+      offset: 0
+      unit: ms
+      remark: 5/bit，大于0xFA无效
+      min: 0
+      max: 1250
+      r/w: w
+    - name: 低档满载点2Y
+      position_raw: Byte 4
+      byte_start: 3
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 25
+      ref_range: 0 ~ 25
+      scaling: 0.1
+      offset: 0
+      unit: '%'
+      remark: 0.1/bit，大于0xFA无效
+      min: 0
+      max: 25
+      r/w: w
+    - name: 低档满载点3X
+      position_raw: Byte 5
+      byte_start: 4
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 2500
+      ref_range: 0 ~ 2500
+      scaling: 10
+      offset: 0
+      unit: ms
+      remark: 10/bit，大于0xFA无效
+      min: 0
+      max: 2500
+      r/w: w
+    - name: 低档满载点3Y
+      position_raw: Byte 6
+      byte_start: 5
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 25
+      ref_range: 0 ~ 25
+      scaling: 0.1
+      offset: 0
+      unit: '%'
+      remark: 0.1/bit，大于0xFA无效
+      min: 0
+      max: 25
+      r/w: w
+    - name: 低档满载点4X
+      position_raw: Byte 7
+      byte_start: 6
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 6250
+      ref_range: 0 ~ 6250
+      scaling: 25
+      offset: 0
+      unit: ms
+      remark: 25/bit，大于0xFA无效
+      min: 0
+      max: 6250
+      r/w: w
+    - name: 低档满载点4Y
+      position_raw: Byte 8
+      byte_start: 7
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 25
+      ref_range: 0 ~ 25
+      scaling: 0.1
+      offset: 0
+      unit: '%'
+      remark: 0.1/bit，大于0xFA无效
+      min: 0
+      max: 25
+      r/w: w
+  '0x188B':
+    priority: '0x06'
+    source_authority: word
+    channel: CAN1
+    interval: 200
+    elements:
+    - name: 低档满载点5X请求
+      position_raw: Byte 1
+      byte_start: 0
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: 0 ~ 6250
+      ref_range: 0 ~ 6250
+      scaling: 25
+      offset: 0
+      unit: ms
+      remark: 25/bit，大于0xFA无效
+      enum_id: 0
+      r/w: w
+      min: 0
+      max: 6250
+    - name: 低档满载点5Y请求
+      position_raw: Byte 2
+      byte_start: 1
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: 0 ~ 25
+      ref_range: 0 ~ 25
+      scaling: 0.1
+      offset: 0
+      unit: '%'
+      remark: 0.1/bit，大于0xFA无效
+      min: 0
+      max: 25
+      enum_id: 0
+      r/w: w
+    - name: 低档满载点6X
+      position_raw: Byte 3
+      byte_start: 2
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 6250
+      ref_range: 0 ~ 6250
+      scaling: 25
+      offset: 0
+      unit: ms
+      remark: 25/bit，大于0xFA无效
+      min: 0
+      max: 6250
+      r/w: w
+    - name: 低档满载点6Y
+      position_raw: Byte 4
+      byte_start: 3
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 25
+      ref_range: 0 ~ 25
+      scaling: 0.1
+      offset: 0
+      unit: '%'
+      remark: 0.1/bit，大于0xFA无效
+      min: 0
+      max: 25
+      r/w: w
+    - name: 低档满载点7X
+      position_raw: Byte 5
+      byte_start: 4
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 6250
+      ref_range: 0 ~ 6250
+      scaling: 25
+      offset: 0
+      unit: ms
+      remark: 25/bit，大于0xFA无效
+      min: 0
+      max: 6250
+      r/w: w
+    - name: 低档满载点7Y
+      position_raw: Byte 6
+      byte_start: 5
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 25
+      ref_range: 0 ~ 25
+      scaling: 0.1
+      offset: 0
+      unit: '%'
+      remark: 0.1/bit，大于0xFA无效
+      min: 0
+      max: 25
+      r/w: w
+    - name: 低档满载点8X
+      position_raw: Byte 7
+      byte_start: 6
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 6250
+      ref_range: 0 ~ 6250
+      scaling: 25
+      offset: 0
+      unit: ms
+      remark: 25/bit，大于0xFA无效
+      min: 0
+      max: 6250
+      r/w: w
+    - name: 低档满载点8Y
+      position_raw: Byte 8
+      byte_start: 7
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 25
+      ref_range: 0 ~ 25
+      scaling: 0.1
+      offset: 0
+      unit: '%'
+      remark: 0.1/bit，大于0xFA无效
+      min: 0
+      max: 25
+      r/w: w
+  '0x188C':
+    priority: '0x06'
+    source_authority: word
+    channel: CAN1
+    interval: 200
+    elements:
+    - name: 倒档满载点1X请求
+      position_raw: Byte 1
+      byte_start: 0
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: 0 ~ 1250
+      ref_range: 0 ~ 1250
+      scaling: 5
+      offset: 0
+      unit: ms
+      remark: 5/bit，大于0xFA无效
+      min: 0
+      max: 1250
+      enum_id: 0
+      r/w: w
+    - name: 倒档满载点1Y请求
+      position_raw: Byte 2
+      byte_start: 1
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: 0 ~ 50
+      ref_range: 0 ~ 50
+      scaling: 0.2
+      offset: 0
+      unit: '%'
+      remark: 0.2/bit，大于0xFA无效
+      min: 0
+      max: 50
+      enum_id: 0
+      r/w: w
+    - name: 倒档满载点2X
+      position_raw: Byte 3
+      byte_start: 2
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 1250
+      ref_range: 0 ~ 1250
+      scaling: 5
+      offset: 0
+      unit: ms
+      remark: 5/bit，大于0xFA无效
+      min: 0
+      max: 1250
+      r/w: w
+    - name: 倒档满载点2Y
+      position_raw: Byte 4
+      byte_start: 3
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 25
+      ref_range: 0 ~ 25
+      scaling: 0.1
+      offset: 0
+      unit: '%'
+      remark: 0.1/bit，大于0xFA无效
+      min: 0
+      max: 25
+      r/w: w
+    - name: 倒档满载点3X
+      position_raw: Byte 5
+      byte_start: 4
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 2500
+      ref_range: 0 ~ 2500
+      scaling: 10
+      offset: 0
+      unit: ms
+      remark: 10/bit，大于0xFA无效
+      min: 0
+      max: 2500
+      r/w: w
+    - name: 倒档满载点3Y
+      position_raw: Byte 6
+      byte_start: 5
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 25
+      ref_range: 0 ~ 25
+      scaling: 0.1
+      offset: 0
+      unit: '%'
+      remark: 0.1/bit，大于0xFA无效
+      min: 0
+      max: 25
+      r/w: w
+    - name: 倒档满载点4X
+      position_raw: Byte 7
+      byte_start: 6
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 6250
+      ref_range: 0 ~ 6250
+      scaling: 25
+      offset: 0
+      unit: ms
+      remark: 25/bit，大于0xFA无效
+      min: 0
+      max: 6250
+      r/w: w
+    - name: 倒档满载点4Y
+      position_raw: Byte 8
+      byte_start: 7
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 25
+      ref_range: 0 ~ 25
+      scaling: 0.1
+      offset: 0
+      unit: '%'
+      remark: 0.1/bit，大于0xFA无效
+      min: 0
+      max: 25
+      r/w: w
+  '0x188D':
+    priority: '0x06'
+    source_authority: word
+    channel: CAN1
+    interval: 200
+    elements:
+    - name: 倒档满载点5X请求
+      position_raw: Byte 1
+      byte_start: 0
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: 0 ~ 6250
+      ref_range: 0 ~ 6250
+      scaling: 25
+      offset: 0
+      unit: ms
+      remark: 25/bit，大于0xFA无效
+      enum_id: 0
+      r/w: w
+      min: 0
+      max: 6250
+    - name: 倒档满载点5Y请求
+      position_raw: Byte 2
+      byte_start: 1
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: 0 ~ 25
+      ref_range: 0 ~ 25
+      scaling: 0.1
+      offset: 0
+      unit: '%'
+      remark: 0.1/bit，大于0xFA无效
+      min: 0
+      max: 25
+      enum_id: 0
+      r/w: w
+    - name: 倒档满载点6X
+      position_raw: Byte 3
+      byte_start: 2
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 6250
+      ref_range: 0 ~ 6250
+      scaling: 25
+      offset: 0
+      unit: ms
+      remark: 25/bit，大于0xFA无效
+      min: 0
+      max: 6250
+      r/w: w
+    - name: 倒档满载点6Y
+      position_raw: Byte 4
+      byte_start: 3
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 25
+      ref_range: 0 ~ 25
+      scaling: 0.1
+      offset: 0
+      unit: '%'
+      remark: 0.1/bit，大于0xFA无效
+      min: 0
+      max: 25
+      r/w: w
+    - name: 倒档满载点7X
+      position_raw: Byte 5
+      byte_start: 4
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 6250
+      ref_range: 0 ~ 6250
+      scaling: 25
+      offset: 0
+      unit: ms
+      remark: 25/bit，大于0xFA无效
+      min: 0
+      max: 6250
+      r/w: w
+    - name: 倒档满载点7Y
+      position_raw: Byte 6
+      byte_start: 5
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 25
+      ref_range: 0 ~ 25
+      scaling: 0.1
+      offset: 0
+      unit: '%'
+      remark: 0.1/bit，大于0xFA无效
+      min: 0
+      max: 25
+      r/w: w
+    - name: 倒档满载点8X
+      position_raw: Byte 7
+      byte_start: 6
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 6250
+      ref_range: 0 ~ 6250
+      scaling: 25
+      offset: 0
+      unit: ms
+      remark: 25/bit，大于0xFA无效
+      min: 0
+      max: 6250
+      r/w: w
+    - name: 倒档满载点8Y
+      position_raw: Byte 8
+      byte_start: 7
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 25
+      ref_range: 0 ~ 25
+      scaling: 0.1
+      offset: 0
+      unit: '%'
+      remark: 0.1/bit，大于0xFA无效
+      min: 0
+      max: 25
+      r/w: w
+  '0x1890':
+    priority: '0x06'
+    source_authority: word
+    channel: CAN1
+    interval: 200
+    elements:
+    - name: H2L开启点1X请求
+      position_raw: Byte 1
+      byte_start: 0
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: 0 ~ 1250
+      ref_range: 0 ~ 1250
+      scaling: 5
+      offset: 0
+      unit: ms
+      remark: 5/bit，大于0xFA无效
+      min: 0
+      max: 1250
+      enum_id: 0
+      r/w: w
+    - name: H2L开启点1Y请求
+      position_raw: Byte 2
+      byte_start: 1
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: 0 ~ 100
+      ref_range: 0 ~ 100
+      scaling: 0.4
+      offset: 0
+      unit: '%'
+      remark: 0.4/bit，大于0xFA无效
+      min: 0
+      max: 100
+      enum_id: 0
+      r/w: w
+    - name: H2L开启点2X
+      position_raw: Byte 3
+      byte_start: 2
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 1250
+      ref_range: 0 ~ 1250
+      scaling: 5
+      offset: 0
+      unit: ms
+      remark: 5/bit，大于0xFA无效
+      min: 0
+      max: 1250
+      r/w: w
+    - name: H2L开启点2Y
+      position_raw: Byte 4
+      byte_start: 3
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 25
+      ref_range: 0 ~ 25
+      scaling: 0.1
+      offset: 0
+      unit: '%'
+      remark: 0.1/bit，大于0xFA无效
+      min: 0
+      max: 25
+      r/w: w
+    - name: H2L开启点3X
+      position_raw: Byte 5
+      byte_start: 4
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 2500
+      ref_range: 0 ~ 2500
+      scaling: 10
+      offset: 0
+      unit: ms
+      remark: 10/bit，大于0xFA无效
+      min: 0
+      max: 2500
+      r/w: w
+    - name: H2L开启点3Y
+      position_raw: Byte 6
+      byte_start: 5
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 25
+      ref_range: 0 ~ 25
+      scaling: 0.1
+      offset: 0
+      unit: '%'
+      remark: 0.1/bit，大于0xFA无效
+      min: 0
+      max: 25
+      r/w: w
+    - name: H2L开启点4X
+      position_raw: Byte 7
+      byte_start: 6
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 6250
+      ref_range: 0 ~ 6250
+      scaling: 25
+      offset: 0
+      unit: ms
+      remark: 25/bit，大于0xFA无效
+      min: 0
+      max: 6250
+      r/w: w
+    - name: H2L开启点4Y
+      position_raw: Byte 8
+      byte_start: 7
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 50
+      ref_range: 0 ~ 50
+      scaling: 0.2
+      offset: 0
+      unit: '%'
+      remark: 0.2/bit，大于0xFA无效
+      min: 0
+      max: 50
+      r/w: w
+  '0x1891':
+    priority: '0x06'
+    source_authority: word
+    channel: CAN1
+    interval: 200
+    elements:
+    - name: H2L开启点5X请求
+      position_raw: Byte 1
+      byte_start: 0
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: 0 ~ 6250
+      ref_range: 0 ~ 6250
+      scaling: 25
+      offset: 0
+      unit: ms
+      remark: 25/bit，大于0xFA无效
+      enum_id: 0
+      r/w: w
+      min: 0
+      max: 6250
+    - name: H2L开启点5Y请求
+      position_raw: Byte 2
+      byte_start: 1
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: 0 ~ 100
+      ref_range: 0 ~ 100
+      scaling: 0.4
+      offset: 0
+      unit: '%'
+      remark: 0.4/bit，大于0xFA无效
+      min: 0
+      max: 100
+      enum_id: 0
+      r/w: w
+    - name: H2L开启点6X
+      position_raw: Byte 3
+      byte_start: 2
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 6250
+      ref_range: 0 ~ 6250
+      scaling: 25
+      offset: 0
+      unit: ms
+      remark: 25/bit，大于0xFA无效
+      min: 0
+      max: 6250
+      r/w: w
+    - name: H2L开启点6Y
+      position_raw: Byte 4
+      byte_start: 3
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 100
+      ref_range: 0 ~ 100
+      scaling: 0.4
+      offset: 0
+      unit: '%'
+      remark: 0.4/bit，大于0xFA无效
+      min: 0
+      max: 100
+      r/w: w
+    - name: H2L开启点7X
+      position_raw: Byte 5
+      byte_start: 4
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 6250
+      ref_range: 0 ~ 6250
+      scaling: 25
+      offset: 0
+      unit: ms
+      remark: 25/bit，大于0xFA无效
+      min: 0
+      max: 6250
+      r/w: w
+    - name: H2L开启点7Y
+      position_raw: Byte 6
+      byte_start: 5
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 100
+      ref_range: 0 ~ 100
+      scaling: 0.4
+      offset: 0
+      unit: '%'
+      remark: 0.4/bit，大于0xFA无效
+      min: 0
+      max: 100
+      r/w: w
+    - name: H2L开启点8X
+      position_raw: Byte 7
+      byte_start: 6
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 6250
+      ref_range: 0 ~ 6250
+      scaling: 25
+      offset: 0
+      unit: ms
+      remark: 25/bit，大于0xFA无效
+      min: 0
+      max: 6250
+      r/w: w
+    - name: H2L开启点8Y
+      position_raw: Byte 8
+      byte_start: 7
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 100
+      ref_range: 0 ~ 100
+      scaling: 0.4
+      offset: 0
+      unit: '%'
+      remark: 0.4/bit，大于0xFA无效
+      min: 0
+      max: 100
+      r/w: w
+  '0x1892':
+    priority: '0x06'
+    source_authority: word
+    channel: CAN1
+    interval: 200
+    elements:
+    - name: H2L关闭点1X请求
+      position_raw: Byte 1
+      byte_start: 0
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: 0 ~ 1250
+      ref_range: 0 ~ 1250
+      scaling: 5
+      offset: 0
+      unit: ms
+      remark: 5/bit，大于0xFA无效
+      enum_id: 0
+      r/w: w
+      min: 0
+      max: 1250
+    - name: H2L关闭点1Y请求
+      position_raw: Byte 2
+      byte_start: 1
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: 0 ~ 50
+      ref_range: 0 ~ 50
+      scaling: 0.2
+      offset: 0
+      unit: '%'
+      remark: 0.2/bit，大于0xFA无效
+      min: 0
+      max: 50
+      enum_id: 0
+      r/w: w
+    - name: H2L关闭点2X
+      position_raw: Byte 3
+      byte_start: 2
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 1250
+      ref_range: 0 ~ 1250
+      scaling: 5
+      offset: 0
+      unit: ms
+      remark: 5/bit，大于0xFA无效
+      min: 0
+      max: 1250
+      r/w: w
+    - name: H2L关闭点2Y
+      position_raw: Byte 4
+      byte_start: 3
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 25
+      ref_range: 0 ~ 25
+      scaling: 0.1
+      offset: 0
+      unit: '%'
+      remark: 0.1/bit，大于0xFA无效
+      min: 0
+      max: 25
+      r/w: w
+    - name: H2L关闭点3X
+      position_raw: Byte 5
+      byte_start: 4
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 2500
+      ref_range: 0 ~ 2500
+      scaling: 10
+      offset: 0
+      unit: ms
+      remark: 10/bit，大于0xFA无效
+      min: 0
+      max: 2500
+      r/w: w
+    - name: H2L关闭点3Y
+      position_raw: Byte 6
+      byte_start: 5
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 25
+      ref_range: 0 ~ 25
+      scaling: 0.1
+      offset: 0
+      unit: '%'
+      remark: 0.1/bit，大于0xFA无效
+      min: 0
+      max: 25
+      r/w: w
+    - name: H2L关闭点4X
+      position_raw: Byte 7
+      byte_start: 6
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 6250
+      ref_range: 0 ~ 6250
+      scaling: 25
+      offset: 0
+      unit: ms
+      remark: 25/bit，大于0xFA无效
+      min: 0
+      max: 6250
+      r/w: w
+    - name: H2L关闭点4Y
+      position_raw: Byte 8
+      byte_start: 7
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 25
+      ref_range: 0 ~ 25
+      scaling: 0.1
+      offset: 0
+      unit: '%'
+      remark: 0.1/bit，大于0xFA无效
+      min: 0
+      max: 25
+      r/w: w
+  '0x1893':
+    priority: '0x06'
+    source_authority: word
+    channel: CAN1
+    interval: 200
+    elements:
+    - name: H2L关闭点5X请求
+      position_raw: Byte 1
+      byte_start: 0
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: 0 ~ 6250
+      ref_range: 0 ~ 6250
+      scaling: 25
+      offset: 0
+      unit: ms
+      remark: 25/bit，大于0xFA无效
+      enum_id: 0
+      r/w: w
+      min: 0
+      max: 6250
+    - name: H2L关闭点5Y请求
+      position_raw: Byte 2
+      byte_start: 1
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: 0 ~ 25
+      ref_range: 0 ~ 25
+      scaling: 0.1
+      offset: 0
+      unit: '%'
+      remark: 0.1/bit，大于0xFA无效
+      min: 0
+      max: 25
+      enum_id: 0
+      r/w: w
+    - name: H2L关闭点6X
+      position_raw: Byte 3
+      byte_start: 2
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 6250
+      ref_range: 0 ~ 6250
+      scaling: 25
+      offset: 0
+      unit: ms
+      remark: 25/bit，大于0xFA无效
+      min: 0
+      max: 6250
+      r/w: w
+    - name: H2L关闭点6Y
+      position_raw: Byte 4
+      byte_start: 3
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 25
+      ref_range: 0 ~ 25
+      scaling: 0.1
+      offset: 0
+      unit: '%'
+      remark: 0.1/bit，大于0xFA无效
+      min: 0
+      max: 25
+      r/w: w
+    - name: H2L关闭点7X
+      position_raw: Byte 5
+      byte_start: 4
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 6250
+      ref_range: 0 ~ 6250
+      scaling: 25
+      offset: 0
+      unit: ms
+      remark: 25/bit，大于0xFA无效
+      min: 0
+      max: 6250
+      r/w: w
+    - name: H2L关闭点7Y
+      position_raw: Byte 6
+      byte_start: 5
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 25
+      ref_range: 0 ~ 25
+      scaling: 0.1
+      offset: 0
+      unit: '%'
+      remark: 0.1/bit，大于0xFA无效
+      min: 0
+      max: 25
+      r/w: w
+    - name: H2L关闭点8X
+      position_raw: Byte 7
+      byte_start: 6
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 6250
+      ref_range: 0 ~ 6250
+      scaling: 25
+      offset: 0
+      unit: ms
+      remark: 25/bit，大于0xFA无效
+      min: 0
+      max: 6250
+      r/w: w
+    - name: H2L关闭点8Y
+      position_raw: Byte 8
+      byte_start: 7
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 25
+      ref_range: 0 ~ 25
+      scaling: 0.1
+      offset: 0
+      unit: '%'
+      remark: 0.1/bit，大于0xFA无效
+      min: 0
+      max: 25
+      r/w: w
+  '0x1894':
+    priority: '0x06'
+    source_authority: word
+    channel: CAN1
+    interval: 200
+    elements:
+    - name: L2H开启点1X请求
+      position_raw: Byte 1
+      byte_start: 0
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: 0 ~ 1250
+      ref_range: 0 ~ 1250
+      scaling: 5
+      offset: 0
+      unit: ms
+      remark: 5/bit，大于0xFA无效
+      min: 0
+      max: 1250
+      enum_id: 0
+      r/w: w
+    - name: L2H开启点1Y请求
+      position_raw: Byte 2
+      byte_start: 1
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: 0 ~ 100
+      ref_range: 0 ~ 100
+      scaling: 0.4
+      offset: 0
+      unit: '%'
+      remark: 0.4/bit，大于0xFA无效
+      min: 0
+      max: 100
+      enum_id: 0
+      r/w: w
+    - name: L2H开启点2X
+      position_raw: Byte 3
+      byte_start: 2
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 1250
+      ref_range: 0 ~ 1250
+      scaling: 5
+      offset: 0
+      unit: ms
+      remark: 5/bit，大于0xFA无效
+      min: 0
+      max: 1250
+      r/w: w
+    - name: L2H开启点2Y
+      position_raw: Byte 4
+      byte_start: 3
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 25
+      ref_range: 0 ~ 25
+      scaling: 0.1
+      offset: 0
+      unit: '%'
+      remark: 0.1/bit，大于0xFA无效
+      min: 0
+      max: 25
+      r/w: w
+    - name: L2H开启点3X
+      position_raw: Byte 5
+      byte_start: 4
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 2500
+      ref_range: 0 ~ 2500
+      scaling: 10
+      offset: 0
+      unit: ms
+      remark: 10/bit，大于0xFA无效
+      min: 0
+      max: 2500
+      r/w: w
+    - name: L2H开启点3Y
+      position_raw: Byte 6
+      byte_start: 5
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 25
+      ref_range: 0 ~ 25
+      scaling: 0.1
+      offset: 0
+      unit: '%'
+      remark: 0.1/bit，大于0xFA无效
+      min: 0
+      max: 25
+      r/w: w
+    - name: L2H开启点4X
+      position_raw: Byte 7
+      byte_start: 6
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 6250
+      ref_range: 0 ~ 6250
+      scaling: 25
+      offset: 0
+      unit: ms
+      remark: 25/bit，大于0xFA无效
+      min: 0
+      max: 6250
+      r/w: w
+    - name: L2H开启点4Y
+      position_raw: Byte 8
+      byte_start: 7
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 50
+      ref_range: 0 ~ 50
+      scaling: 0.2
+      offset: 0
+      unit: '%'
+      remark: 0.2/bit，大于0xFA无效
+      min: 0
+      max: 50
+      r/w: w
+  '0x1895':
+    priority: '0x06'
+    source_authority: word
+    channel: CAN1
+    interval: 200
+    elements:
+    - name: L2H开启点5X请求
+      position_raw: Byte 1
+      byte_start: 0
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: 0 ~ 6250
+      ref_range: 0 ~ 6250
+      scaling: 25
+      offset: 0
+      unit: ms
+      remark: 25/bit，大于0xFA无效
+      enum_id: 0
+      r/w: w
+      min: 0
+      max: 6250
+    - name: L2H开启点5Y请求
+      position_raw: Byte 2
+      byte_start: 1
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: 0 ~ 100
+      ref_range: 0 ~ 100
+      scaling: 0.4
+      offset: 0
+      unit: '%'
+      remark: 0.4/bit，大于0xFA无效
+      min: 0
+      max: 100
+      enum_id: 0
+      r/w: w
+    - name: L2H开启点6X
+      position_raw: Byte 3
+      byte_start: 2
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 6250
+      ref_range: 0 ~ 6250
+      scaling: 25
+      offset: 0
+      unit: ms
+      remark: 25/bit，大于0xFA无效
+      min: 0
+      max: 6250
+      r/w: w
+    - name: L2H开启点6Y
+      position_raw: Byte 4
+      byte_start: 3
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 100
+      ref_range: 0 ~ 100
+      scaling: 0.4
+      offset: 0
+      unit: '%'
+      remark: 0.4/bit，大于0xFA无效
+      min: 0
+      max: 100
+      r/w: w
+    - name: L2H开启点7X
+      position_raw: Byte 5
+      byte_start: 4
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 6250
+      ref_range: 0 ~ 6250
+      scaling: 25
+      offset: 0
+      unit: ms
+      remark: 25/bit，大于0xFA无效
+      min: 0
+      max: 6250
+      r/w: w
+    - name: L2H开启点7Y
+      position_raw: Byte 6
+      byte_start: 5
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 100
+      ref_range: 0 ~ 100
+      scaling: 0.4
+      offset: 0
+      unit: '%'
+      remark: 0.4/bit，大于0xFA无效
+      min: 0
+      max: 100
+      r/w: w
+    - name: L2H开启点8X
+      position_raw: Byte 7
+      byte_start: 6
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 6250
+      ref_range: 0 ~ 6250
+      scaling: 25
+      offset: 0
+      unit: ms
+      remark: 25/bit，大于0xFA无效
+      min: 0
+      max: 6250
+      r/w: w
+    - name: L2H开启点8Y
+      position_raw: Byte 8
+      byte_start: 7
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 100
+      ref_range: 0 ~ 100
+      scaling: 0.4
+      offset: 0
+      unit: '%'
+      remark: 0.4/bit，大于0xFA无效
+      min: 0
+      max: 100
+      r/w: w
+  '0x1896':
+    priority: '0x06'
+    source_authority: word
+    channel: CAN1
+    interval: 200
+    elements:
+    - name: L2H关闭点1X请求
+      position_raw: Byte 1
+      byte_start: 0
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: 0 ~ 1250
+      ref_range: 0 ~ 1250
+      scaling: 5
+      offset: 0
+      unit: ms
+      remark: 5/bit，大于0xFA无效
+      enum_id: 0
+      r/w: w
+      min: 0
+      max: 1250
+    - name: L2H关闭点1Y请求
+      position_raw: Byte 2
+      byte_start: 1
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: 0 ~ 50
+      ref_range: 0 ~ 50
+      scaling: 0.2
+      offset: 0
+      unit: '%'
+      remark: 0.2/bit，大于0xFA无效
+      min: 0
+      max: 50
+      enum_id: 0
+      r/w: w
+    - name: L2H关闭点2X
+      position_raw: Byte 3
+      byte_start: 2
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 1250
+      ref_range: 0 ~ 1250
+      scaling: 5
+      offset: 0
+      unit: ms
+      remark: 5/bit，大于0xFA无效
+      min: 0
+      max: 1250
+      r/w: w
+    - name: L2H关闭点2Y
+      position_raw: Byte 4
+      byte_start: 3
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 25
+      ref_range: 0 ~ 25
+      scaling: 0.1
+      offset: 0
+      unit: '%'
+      remark: 0.1/bit，大于0xFA无效
+      min: 0
+      max: 25
+      r/w: w
+    - name: L2H关闭点3X
+      position_raw: Byte 5
+      byte_start: 4
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 2500
+      ref_range: 0 ~ 2500
+      scaling: 10
+      offset: 0
+      unit: ms
+      remark: 10/bit，大于0xFA无效
+      min: 0
+      max: 2500
+      r/w: w
+    - name: L2H关闭点3Y
+      position_raw: Byte 6
+      byte_start: 5
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 25
+      ref_range: 0 ~ 25
+      scaling: 0.1
+      offset: 0
+      unit: '%'
+      remark: 0.1/bit，大于0xFA无效
+      min: 0
+      max: 25
+      r/w: w
+    - name: L2H关闭点4X
+      position_raw: Byte 7
+      byte_start: 6
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 6250
+      ref_range: 0 ~ 6250
+      scaling: 25
+      offset: 0
+      unit: ms
+      remark: 25/bit，大于0xFA无效
+      min: 0
+      max: 6250
+      r/w: w
+    - name: L2H关闭点4Y
+      position_raw: Byte 8
+      byte_start: 7
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 25
+      ref_range: 0 ~ 25
+      scaling: 0.1
+      offset: 0
+      unit: '%'
+      remark: 0.1/bit，大于0xFA无效
+      min: 0
+      max: 25
+      r/w: w
+  '0x1897':
+    priority: '0x06'
+    source_authority: word
+    channel: CAN1
+    interval: 200
+    elements:
+    - name: L2H关闭点5X请求
+      position_raw: Byte 1
+      byte_start: 0
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: 0 ~ 6250
+      ref_range: 0 ~ 6250
+      scaling: 25
+      offset: 0
+      unit: ms
+      remark: 25/bit，大于0xFA无效
+      enum_id: 0
+      r/w: w
+      min: 0
+      max: 6250
+    - name: L2H关闭点5Y请求
+      position_raw: Byte 2
+      byte_start: 1
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: 0 ~ 25
+      ref_range: 0 ~ 25
+      scaling: 0.1
+      offset: 0
+      unit: '%'
+      remark: 0.1/bit，大于0xFA无效
+      min: 0
+      max: 25
+      enum_id: 0
+      r/w: w
+    - name: L2H关闭点6X
+      position_raw: Byte 3
+      byte_start: 2
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 6250
+      ref_range: 0 ~ 6250
+      scaling: 25
+      offset: 0
+      unit: ms
+      remark: 25/bit，大于0xFA无效
+      min: 0
+      max: 6250
+      r/w: w
+    - name: L2H关闭点6Y
+      position_raw: Byte 4
+      byte_start: 3
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 25
+      ref_range: 0 ~ 25
+      scaling: 0.1
+      offset: 0
+      unit: '%'
+      remark: 0.1/bit，大于0xFA无效
+      min: 0
+      max: 25
+      r/w: w
+    - name: L2H关闭点7X
+      position_raw: Byte 5
+      byte_start: 4
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 6250
+      ref_range: 0 ~ 6250
+      scaling: 25
+      offset: 0
+      unit: ms
+      remark: 25/bit，大于0xFA无效
+      min: 0
+      max: 6250
+      r/w: w
+    - name: L2H关闭点7Y
+      position_raw: Byte 6
+      byte_start: 5
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 25
+      ref_range: 0 ~ 25
+      scaling: 0.1
+      offset: 0
+      unit: '%'
+      remark: 0.1/bit，大于0xFA无效
+      min: 0
+      max: 25
+      r/w: w
+    - name: L2H关闭点8X
+      position_raw: Byte 7
+      byte_start: 6
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 6250
+      ref_range: 0 ~ 6250
+      scaling: 25
+      offset: 0
+      unit: ms
+      remark: 25/bit，大于0xFA无效
+      min: 0
+      max: 6250
+      r/w: w
+    - name: L2H关闭点8Y
+      position_raw: Byte 8
+      byte_start: 7
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 25
+      ref_range: 0 ~ 25
+      scaling: 0.1
+      offset: 0
+      unit: '%'
+      remark: 0.1/bit，大于0xFA无效
+      min: 0
+      max: 25
+      r/w: w
+  '0x1898':
+    priority: '0x06'
+    source_authority: word
+    channel: CAN1
+    interval: 200
+    elements:
+    - name: PTO起步点1X请求
+      position_raw: Byte 1
+      byte_start: 0
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: 0 ~ 500
+      ref_range: 0 ~ 500
+      scaling: 5
+      offset: 0
+      unit: ms
+      remark: 5/bit，大于0xFA无效
+      min: 0
+      max: 500
+      enum_id: 0
+      r/w: w
+    - name: PTO起步点1Y请求
+      position_raw: Byte 2
+      byte_start: 1
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: 0 ~ 25
+      ref_range: 0 ~ 25
+      scaling: 0.1
+      offset: 0
+      unit: '%'
+      remark: 0.1/bit，大于0xFA无效
+      min: 0
+      max: 25
+      enum_id: 0
+      r/w: w
+    - name: PTO起步点2X
+      position_raw: Byte 3
+      byte_start: 2
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 500
+      ref_range: 0 ~ 500
+      scaling: 5
+      offset: 0
+      unit: ms
+      remark: TODO
+      min: 0
+      max: 500
+      r/w: w
+    - name: PTO起步点2Y
+      position_raw: Byte 4
+      byte_start: 3
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 25
+      ref_range: 0 ~ 25
+      scaling: 0.1
+      offset: 0
+      unit: '%'
+      remark: TODO
+      min: 0
+      max: 25
+      r/w: w
+    - name: PTO起步点3X
+      position_raw: Byte 5
+      byte_start: 4
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 1000
+      ref_range: 0 ~ 1000
+      scaling: 10
+      offset: 0
+      unit: ms
+      remark: TODO
+      min: 0
+      max: 1000
+      r/w: w
+    - name: PTO起步点3Y
+      position_raw: Byte 6
+      byte_start: 5
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 25
+      ref_range: 0 ~ 25
+      scaling: 0.1
+      offset: 0
+      unit: '%'
+      remark: TODO
+      min: 0
+      max: 25
+      r/w: w
+    - name: PTO起步点4X
+      position_raw: Byte 7
+      byte_start: 6
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 6250
+      ref_range: 0 ~ 6250
+      scaling: 25
+      offset: 0
+      unit: ms
+      remark: TODO
+      min: 0
+      max: 6250
+      r/w: w
+    - name: PTO起步点4Y
+      position_raw: Byte 8
+      byte_start: 7
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 25
+      ref_range: 0 ~ 25
+      scaling: 0.1
+      offset: 0
+      unit: '%'
+      remark: TODO
+      min: 0
+      max: 25
+      r/w: w
+  '0x1899':
+    priority: '0x06'
+    source_authority: word
+    channel: CAN1
+    interval: 200
+    elements:
+    - name: PTO起步点5X请求
+      position_raw: Byte 1
+      byte_start: 0
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: ''
+      ref_range: ''
+      scaling: 25
+      offset: 0
+      unit: ms
+      remark: 25/bit，大于0xFA无效
+      enum_id: 0
+      r/w: w
+      min: 0
+      max: 6250
+    - name: PTO起步点5Y请求
+      position_raw: Byte 2
+      byte_start: 1
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: 0 ~ 25
+      ref_range: 0 ~ 25
+      scaling: 0.1
+      offset: 0
+      unit: '%'
+      remark: 0.1/bit，大于0xFA无效
+      min: 0
+      max: 25
+      enum_id: 0
+      r/w: w
+    - name: PTO起步点6X
+      position_raw: Byte 3
+      byte_start: 2
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 6250
+      ref_range: 0 ~ 6250
+      scaling: 25
+      offset: 0
+      unit: ms
+      remark: TODO
+      min: 0
+      max: 6250
+      r/w: w
+    - name: PTO起步点6Y
+      position_raw: Byte 4
+      byte_start: 3
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 25
+      ref_range: 0 ~ 25
+      scaling: 0.1
+      offset: 0
+      unit: '%'
+      remark: TODO
+      min: 0
+      max: 25
+      r/w: w
+    - name: PTO起步点7X
+      position_raw: Byte 5
+      byte_start: 4
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 6250
+      ref_range: 0 ~ 6250
+      scaling: 25
+      offset: 0
+      unit: ms
+      remark: TODO
+      min: 0
+      max: 6250
+      r/w: w
+    - name: PTO起步点7Y
+      position_raw: Byte 6
+      byte_start: 5
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 25
+      ref_range: 0 ~ 25
+      scaling: 0.1
+      offset: 0
+      unit: '%'
+      remark: TODO
+      min: 0
+      max: 25
+      r/w: w
+    - name: PTO起步点8X
+      position_raw: Byte 7
+      byte_start: 6
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 6250
+      ref_range: 0 ~ 6250
+      scaling: 25
+      offset: 0
+      unit: ms
+      remark: TODO
+      min: 0
+      max: 6250
+      r/w: w
+    - name: PTO起步点8Y
+      position_raw: Byte 8
+      byte_start: 7
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      enum_id: 0
+      data_range: 0 ~ 25
+      ref_range: 0 ~ 25
+      scaling: 0.1
+      offset: 0
+      unit: '%'
+      remark: TODO
+      min: 0
+      max: 25
+      r/w: w
+  '0x189E':
+    priority: '0x06'
+    source_authority: word
+    channel: CAN1
+    interval: 200
+    elements:
+    - name: 高档手动控制请求
+      position_raw: Byte 1~2
+      byte_start: 0
+      byte_length: 2
+      bit_start: 0
+      bit_length: 16
+      data_range: 0 ~ 100%
+      ref_range: 0 ~ 100%
+      scaling: 0.002
+      offset: 0
+      unit: '%'
+      remark: 0.002%/bit
+      min: 0
+      max: 100
+      enum_id: 0
+      r/w: w
+      precision: 3
+    - name: 低档手动控制请求
+      position_raw: Byte 3~4
+      byte_start: 2
+      byte_length: 2
+      bit_start: 0
+      bit_length: 16
+      data_range: 0 ~ 100%
+      ref_range: 0 ~ 100%
+      scaling: 0.002
+      offset: 0
+      unit: '%'
+      remark: 0.002%/bit
+      min: 0
+      max: 100
+      enum_id: 0
+      r/w: w
+      precision: 3
+    - name: 倒档手动控制请求
+      position_raw: Byte 5~6
+      byte_start: 4
+      byte_length: 2
+      bit_start: 0
+      bit_length: 16
+      data_range: 0 ~ 100%
+      ref_range: 0 ~ 100%
+      scaling: 0.002
+      offset: 0
+      unit: '%'
+      remark: 0.002%/bit
+      min: 0
+      max: 100
+      enum_id: 0
+      r/w: w
+      precision: 3
+    - name: PTO手动控制请求
+      position_raw: Byte 7~8
+      byte_start: 6
+      byte_length: 2
+      bit_start: 0
+      bit_length: 16
+      data_range: 0 ~ 100%
+      ref_range: 0 ~ 100%
+      scaling: 0.002
+      offset: 0
+      unit: '%'
+      remark: 0.002%/bit
+      min: 0
+      max: 100
+      enum_id: 0
+      r/w: w
+      precision: 3
+  '0x18A0':
+    priority: '0x06'
+    source_authority: word
+    channel: CAN1
+    interval: 200
+    elements:
+    - name: 高档电流偏移请求
+      position_raw: Byte 1
+      byte_start: 0
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: 0 ~ 255
+      ref_range: 0 ~ 255
+      scaling: 1
+      offset: 0
+      unit: raw
+      remark: 原始字节值
+      min: 0
+      max: 255
+      enum_id: 0
+      r/w: w
+    - name: 低档电流偏移请求
+      position_raw: Byte 2
+      byte_start: 1
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: 0 ~ 255
+      ref_range: 0 ~ 255
+      scaling: 1
+      offset: 0
+      unit: raw
+      remark: 原始字节值
+      min: 0
+      max: 255
+      enum_id: 0
+      r/w: w
+    - name: 倒档电流偏移请求
+      position_raw: Byte 3
+      byte_start: 2
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: 0 ~ 255
+      ref_range: 0 ~ 255
+      scaling: 1
+      offset: 0
+      unit: raw
+      remark: 原始字节值
+      min: 0
+      max: 255
+      enum_id: 0
+      r/w: w
+    - name: PTO电流偏移请求
+      position_raw: Byte 4
+      byte_start: 3
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: 0 ~ 255
+      ref_range: 0 ~ 255
+      scaling: 1
+      offset: 0
+      unit: raw
+      remark: 原始字节值
+      min: 0
+      max: 255
+      enum_id: 0
+      r/w: w
+    - name: 未定义
+      position_raw: Byte 5~8
+      byte_start: 4
+      byte_length: 4
+      bit_start: 0
+      bit_length: 32
+      data_range: ''
+      ref_range: ''
+      scaling: null
+      offset: null
+      unit: ''
+      remark: ''
+      enum_id: 0
+      r/w: ''
+  '0x18A1':
+    priority: '0x06'
+    source_authority: word
+    channel: CAN1
+    interval: 200
+    elements:
+    - name: 高档受PTO影响率请求
+      position_raw: Byte 1~2
+      byte_start: 0
+      byte_length: 2
+      bit_start: 0
+      bit_length: 16
+      data_range: 0 ~ 100%
+      ref_range: 0 ~ 100%
+      scaling: 0.002
+      offset: 0
+      unit: '%'
+      remark: 0.002%/bit
+      min: 0
+      max: 100
+      enum_id: 0
+      r/w: w
+      precision: 3
+    - name: 低档受PTO影响率请求
+      position_raw: Byte 3~4
+      byte_start: 2
+      byte_length: 2
+      bit_start: 0
+      bit_length: 16
+      data_range: 0 ~ 100%
+      ref_range: 0 ~ 100%
+      scaling: 0.002
+      offset: 0
+      unit: '%'
+      remark: 0.002%/bit
+      min: 0
+      max: 100
+      enum_id: 0
+      r/w: w
+      precision: 3
+    - name: 倒档受PTO影响率请求
+      position_raw: Byte 5~6
+      byte_start: 4
+      byte_length: 2
+      bit_start: 0
+      bit_length: 16
+      data_range: 0 ~ 100%
+      ref_range: 0 ~ 100%
+      scaling: 0.002
+      offset: 0
+      unit: '%'
+      remark: 0.002%/bit
+      min: 0
+      max: 100
+      enum_id: 0
+      r/w: w
+      precision: 3
+    - name: 未定义
+      position_raw: Byte 7~8
+      byte_start: 6
+      byte_length: 2
+      bit_start: 0
+      bit_length: 16
+      data_range: ''
+      ref_range: ''
+      scaling: null
+      offset: null
+      unit: ''
+      remark: ''
+      enum_id: 0
+      r/w: ''
+  '0x18A2':
+    priority: '0x06'
+    source_authority: word
+    channel: CAN1
+    interval: 200
+    elements:
+    - name: 设置离合踏板机械高点
+      position_raw: Byte 1~2
+      byte_start: 0
+      byte_length: 2
+      bit_start: 0
+      bit_length: 16
+      data_range: -50 ~ 50°
+      ref_range: -50 ~ 50°
+      scaling: 0.002
+      offset: -50
+      unit: °
+      remark: 0.002%/bit
+      min: -50
+      max: 50
+      enum_id: 0
+      r/w: w
+      precision: 3
+    - name: 设置离合踏板机械低点
+      position_raw: Byte 3~4
+      byte_start: 2
+      byte_length: 2
+      bit_start: 0
+      bit_length: 16
+      data_range: -50 ~ 50°
+      ref_range: -50 ~ 50°
+      scaling: 0.002
+      offset: -50
+      unit: °
+      remark: 0.002%/bit
+      min: -50
+      max: 50
+      enum_id: 0
+      r/w: w
+      precision: 3
+    - name: 设置离合踏板空行程
+      position_raw: Byte 5
+      byte_start: 4
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: 0 ~ 25%
+      ref_range: 0 ~ 25%
+      scaling: 0.1
+      offset: 0
+      unit: '%'
+      remark: 0.1%/bit
+      min: 0
+      max: 25
+      enum_id: 0
+      r/w: w
+      precision: 1
+    - name: 设置离合踏板死区
+      position_raw: Byte 6
+      byte_start: 5
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: 0 ~ 25%
+      ref_range: 0 ~ 25%
+      scaling: 0.1
+      offset: 0
+      unit: '%'
+      remark: 0.1%/bit
+      min: 0
+      max: 25
+      enum_id: 0
+      r/w: w
+      precision: 1
+    - name: 设置影子踏板跟踪时间
+      position_raw: Byte 7
+      byte_start: 6
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: 0 ~ 2.5s
+      ref_range: 0 ~ 2.5s
+      scaling: 0.01
+      offset: 0
+      unit: s
+      remark: 0.01s/bit
+      min: 0
+      max: 2.5
+      enum_id: 0
+      r/w: w
+      precision: 2
+    - name: 设置离合踏板灵敏度
+      position_raw: Byte 8
+      byte_start: 7
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: 0 ~ 100%
+      ref_range: 0 ~ 100%
+      scaling: 0.4
+      offset: 0
+      unit: '%'
+      remark: 0.4%/bit
+      min: 0
+      max: 100
+      enum_id: 0
+      r/w: w
+      precision: 1
+  '0x18A3':
+    priority: '0x06'
+    source_authority: word
+    channel: CAN1
+    interval: 200
+    elements:
+    - name: 高档当前压力限制请求
+      position_raw: Byte 1
+      byte_start: 0
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: 0 ~ 100%
+      ref_range: 0 ~ 100%
+      scaling: 0.4
+      offset: 0
+      unit: '%'
+      remark: 0.4%/bit，大于0xFA为关闭
+      min: 0
+      max: 100
+      enum_id: 0
+      r/w: w
+      precision: 1
+    - name: 高档当前压力限制请求
+      position_raw: Byte 2
+      byte_start: 1
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: ''
+      ref_range: ''
+      scaling: null
+      offset: null
+      unit: kPa
+      remark: KPa
+      enum_id: 0
+      r/w: w
+      min: 0
+      max: 2500
+    - name: 低档当前压力限制请求
+      position_raw: Byte 3
+      byte_start: 2
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: 0 ~ 100%
+      ref_range: 0 ~ 100%
+      scaling: 0.4
+      offset: 0
+      unit: '%'
+      remark: 0.4%/bit，大于0xFA为关闭
+      min: 0
+      max: 100
+      enum_id: 0
+      r/w: w
+      precision: 1
+    - name: 低档当前压力限制请求
+      position_raw: Byte 4
+      byte_start: 3
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: ''
+      ref_range: ''
+      scaling: null
+      offset: null
+      unit: KPa
+      remark: ''
+      enum_id: 0
+      r/w: w
+      min: 0
+      max: 2500
+    - name: 倒档当前压力限制请求
+      position_raw: Byte 5
+      byte_start: 4
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: 0 ~ 100%
+      ref_range: 0 ~ 100%
+      scaling: 0.4
+      offset: 0
+      unit: '%'
+      remark: 0.4%/bit，大于0xFA为关闭
+      min: 0
+      max: 100
+      enum_id: 0
+      r/w: w
+      precision: 1
+    - name: 倒档当前压力限制请求
+      position_raw: Byte 6
+      byte_start: 5
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: ''
+      ref_range: ''
+      scaling: null
+      offset: null
+      unit: KPa
+      remark: ''
+      enum_id: 0
+      r/w: w
+      min: 0
+      max: 2500
+    - name: PTO当前压力限制请求
+      position_raw: Byte 7
+      byte_start: 6
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: 0 ~ 100%
+      ref_range: 0 ~ 100%
+      scaling: 0.4
+      offset: 0
+      unit: '%'
+      remark: 0.4%/bit，大于0xFA为关闭
+      min: 0
+      max: 100
+      enum_id: 0
+      r/w: w
+      precision: 1
+    - name: PTO当前压力限制请求
+      position_raw: Byte 8
+      byte_start: 7
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: ''
+      ref_range: ''
+      scaling: null
+      offset: null
+      unit: KPa
+      remark: ''
+      enum_id: 0
+      r/w: w
+      min: 0
+      max: 2500
+  '0x18A4':
+    priority: '0x06'
+    source_authority: word
+    channel: CAN1
+    interval: 200
+    elements:
+    - name: 比例阀最大电流设置
+      position_raw: Byte 1~2
+      byte_start: 0
+      byte_length: 2
+      bit_start: 0
+      bit_length: 16
+      data_range: 0 ~ 1500mA
+      ref_range: 0 ~ 1500mA
+      scaling: 1
+      offset: 0
+      unit: mA
+      remark: 1mA/bit
+      min: 0
+      max: 1500
+      enum_id: 0
+      r/w: w
+    - name: 比例阀死区电流设置
+      position_raw: Byte 3
+      byte_start: 2
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: 0 ~ 200mA
+      ref_range: 0 ~ 200mA
+      scaling: 1
+      offset: 0
+      unit: mA
+      remark: 1mA/bit
+      min: 0
+      max: 200
+      enum_id: 0
+      r/w: w
+    - name: 比例阀颤震频率设置
+      position_raw: Byte 4
+      byte_start: 3
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: 0 ~ 500Hz
+      ref_range: 0 ~ 500Hz
+      scaling: 2
+      offset: 0
+      unit: Hz
+      remark: 2Hz/bit
+      min: 0
+      max: 500
+      enum_id: 0
+      r/w: w
+    - name: 比例阀颤震振幅设置
+      position_raw: Byte 5
+      byte_start: 4
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: 0 ~ 25%
+      ref_range: 0 ~ 25%
+      scaling: 0.1
+      offset: 0
+      unit: '%'
+      remark: 0.1%/bit
+      min: 0
+      max: 25
+      enum_id: 0
+      r/w: w
+      precision: 1
+    - name: 未定义
+      position_raw: Byte 6~8
+      byte_start: 5
+      byte_length: 3
+      bit_start: 0
+      bit_length: 24
+      data_range: ''
+      ref_range: ''
+      scaling: null
+      offset: null
+      unit: ''
+      remark: ''
+      enum_id: 0
+      r/w: ''
+  '0x18A5':
+    priority: '0x06'
+    source_authority: word
+    channel: CAN1
+    interval: 200
+    elements:
+    - name: 高档PID比例系数请求
+      position_raw: Byte 1~2
+      byte_start: 0
+      byte_length: 2
+      bit_start: 0
+      bit_length: 16
+      data_range: ''
+      ref_range: ''
+      scaling: 1
+      offset: 0
+      unit: ''
+      remark: 1/bit
+      enum_id: 0
+      r/w: ''
+    - name: 低档PID比例系统请求
+      position_raw: Byte 3~4
+      byte_start: 2
+      byte_length: 2
+      bit_start: 0
+      bit_length: 16
+      data_range: ''
+      ref_range: ''
+      scaling: 1
+      offset: 0
+      unit: ''
+      remark: 1/bit
+      enum_id: 0
+      r/w: ''
+    - name: 倒档PID比例系数请求
+      position_raw: Byte 5~6
+      byte_start: 4
+      byte_length: 2
+      bit_start: 0
+      bit_length: 16
+      data_range: ''
+      ref_range: ''
+      scaling: 1
+      offset: 0
+      unit: ''
+      remark: 1/bit
+      enum_id: 0
+      r/w: ''
+    - name: PTO PID 比例系数请求
+      position_raw: Byte 7~8
+      byte_start: 6
+      byte_length: 2
+      bit_start: 0
+      bit_length: 16
+      data_range: ''
+      ref_range: ''
+      scaling: 1
+      offset: 0
+      unit: ''
+      remark: 1/bit
+      enum_id: 0
+      r/w: ''
+  '0x18A8':
+    priority: '0x06'
+    source_authority: word
+    channel: CAN1
+    interval: 200
+    elements:
+    - name: 前进方向加速性修正
+      position_raw: Byte 1~2
+      byte_start: 0
+      byte_length: 2
+      bit_start: 0
+      bit_length: 16
+      data_range: -2.00 ~ 2.00g
+      ref_range: -2.00 ~ 2.00g
+      scaling: null
+      offset: -2
+      unit: g
+      remark: ''
+      min: -2
+      max: 2
+      enum_id: 0
+      r/w: ''
+    - name: 右侧方向加速度修正
+      position_raw: Byte 3~4
+      byte_start: 2
+      byte_length: 2
+      bit_start: 0
+      bit_length: 16
+      data_range: -2.00 ~ 2.00g
+      ref_range: -2.00 ~ 2.00g
+      scaling: null
+      offset: -2
+      unit: g
+      remark: ''
+      min: -2
+      max: 2
+      enum_id: 0
+      r/w: ''
+    - name: 垂直方向加速度修正
+      position_raw: Byte 5~6
+      byte_start: 4
+      byte_length: 2
+      bit_start: 0
+      bit_length: 16
+      data_range: -2.00 ~ 2.00g
+      ref_range: -2.00 ~ 2.00g
+      scaling: null
+      offset: -2
+      unit: g
+      remark: ''
+      min: -2
+      max: 2
+      enum_id: 0
+      r/w: ''
+  '0x18B0':
+    priority: '0x06'
+    source_authority: word
+    channel: CAN1
+    interval: 200
+    elements:
+    - name: 自检比例系数请求
+      position_raw: Byte 1~2
+      byte_start: 0
+      byte_length: 2
+      bit_start: 0
+      bit_length: 16
+      data_range: ''
+      ref_range: ''
+      scaling: 1
+      offset: 0
+      unit: ''
+      remark: 1/bit
+      enum_id: 0
+      r/w: ''
+    - name: 自检积分时间请求
+      position_raw: Byte 3~4
+      byte_start: 2
+      byte_length: 2
+      bit_start: 0
+      bit_length: 16
+      data_range: ''
+      ref_range: ''
+      scaling: null
+      offset: null
+      unit: ''
+      remark: ''
+      enum_id: 0
+      r/w: ''
+    - name: 自检微分时间请求
+      position_raw: Byte 5~6
+      byte_start: 4
+      byte_length: 2
+      bit_start: 0
+      bit_length: 16
+      data_range: ''
+      ref_range: ''
+      scaling: null
+      offset: null
+      unit: ''
+      remark: ''
+      enum_id: 0
+      r/w: ''
+  '0x18B1':
+    priority: '0x06'
+    source_authority: word
+    channel: CAN1
+    interval: 200
+    elements:
+    - name: 自检0点压力请求
+      position_raw: Byte 1
+      byte_start: 0
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: ''
+      ref_range: ''
+      scaling: 10
+      offset: 0
+      unit: kPa
+      remark: 10kPa/bit
+      enum_id: 0
+      r/w: ''
+    - name: 自检1点压力请求
+      position_raw: Byte 2
+      byte_start: 1
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: ''
+      ref_range: ''
+      scaling: null
+      offset: null
+      unit: ''
+      remark: ''
+      enum_id: 0
+      r/w: ''
+    - name: 自检2点压力请求
+      position_raw: Byte 3
+      byte_start: 2
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: ''
+      ref_range: ''
+      scaling: null
+      offset: null
+      unit: ''
+      remark: ''
+      enum_id: 0
+      r/w: ''
+    - name: 自检3点压力请求
+      position_raw: Byte 4
+      byte_start: 3
+      byte_length: 1
+      bit_start: 0
+      bit_length: 8
+      data_range: ''
+      ref_range: ''
+      scaling: null
+      offset: null
+      unit: ''
+      remark: ''
+      enum_id: 0
+      r/w: ''

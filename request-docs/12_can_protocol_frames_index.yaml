@@ -1,0 +1,20 @@
+# ────────────────────────────────────────────────────────
+# 12_can_protocol_frames 协议帧文件索引
+# 原文件 12_can_protocol_frames.yaml 已拆分为以下文件:
+#
+#   加载指引:
+#     解析程序应按需加载下列文件，或一次性合并所有帧定义。
+#     公共元数据 (metadata) 定义在各拆分文件以及原始文件中均有副本。
+#
+#   拆分文件列表:
+#     - 12_can_protocol_frames_15xx.yaml  → PGN 0x1500 ~ 0x15FF (64 frames)
+#     - 12_can_protocol_frames_17xx.yaml  → PGN 0x1700 ~ 0x17FF (59 frames)
+#     - 12_can_protocol_frames_18xx.yaml  → PGN 0x1800 ~ 0x18FF (38 frames)
+#     - 12_can_protocol_frames_other.yaml → 其他 PGN (38 frames:
+#       0x01xx, 0xF0xx, 0xFBxx, 0xFCxx, 0xFDxx, 0xFExx)
+#
+#   原始完整文件:
+#     - 12_can_protocol_frames.yaml      → 完整文件（已经不再保留，仅保留拆分文件，合并后于原始完整文件一致）
+#
+#   PGN 总数: 199
+# ────────────────────────────────────────────────────────
