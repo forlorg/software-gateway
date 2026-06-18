@@ -2,13 +2,23 @@
 
 ---
 
+## 0. 回复风格
+
+- 所有面向用户的回复必须以“亲爱的”作为开头问候语。
+- 推荐格式：`亲爱的，...`
+- 即使是简短确认、报错说明、代码审查、文档生成、编译指导或调试建议，也必须遵守该开头规则。
+- 代码块、补丁、日志、命令行输出等内容保持原样，不需要强行插入“亲爱的”。
+
+---
+
 ## 1. 环境约束
 
 - OS: Windows
 - Editor: VS Code + Claude Code
 - 工具链: PlatformIO Core 6.1.19（通过 `python -m platformio` 调用）
 - Python: 系统已安装 `pyserial`（用于串口侦测）
-- 目标硬件: ESP32-S3-DevKitC-1 (QFN56), 240MHz, 320KB RAM, 8MB Flash, PSRAM 8MB
+- 目标硬件选择: ESP32-S3-DevKitC-1 (QFN56), 240MHz, 320KB RAM, 8MB Flash, PSRAM 8MB
+- 目标硬件实际：ESP32-S3-WROOM1U 模块，240MHz, 512KB SRAM, 16MB Flash, PSRAM 8MB
 - 串口芯片: CH343 USB-to-Serial（设备插入后通常映射为 COMx）
 
 ---
@@ -29,7 +39,8 @@ python -m serial.tools.list_ports -v
 ```
 
 输出示例：
-```
+
+```text
 COM17
     desc: USB-Enhanced-SERIAL CH343 (COM17)
     hwid: USB VID:PID=1A86:55D3 SER=5C38144399 LOCATION=1-1.2
@@ -64,7 +75,7 @@ python -m platformio run --target upload --upload-port COM<端口号> && python 
 ## 3. 项目结构
 
 | 目录/文件 | 说明 |
-|-----------|------|
+| --- | --- |
 | `platformio.ini` | PlatformIO 项目配置（板卡、框架、依赖、编译标志） |
 | `src/main.cpp` | 固件入口 |
 | `src/can/` | CAN 驱动、收发、流量统计 |
@@ -79,7 +90,7 @@ python -m platformio run --target upload --upload-port COM<端口号> && python 
 ### 3.1 任务/核分配
 
 | 任务 | 核心 | 备注 |
-|------|------|------|
+| --- | --- | --- |
 | WiFi AP 任务 | Core 0 | 管理 SoftAP 配网 |
 | Web Server 任务 | Core 0 | Arduino 同步 WebServer，端口 80 |
 | 心跳 LED 任务 | Core 1 | GPIO 1，500ms 半周期 |
@@ -88,7 +99,7 @@ python -m platformio run --target upload --upload-port COM<端口号> && python 
 ### 3.2 关键运行时参数
 
 | 参数 | 值 |
-|------|-----|
+| --- | --- |
 | CPU 频率 | 240 MHz |
 | SDK 版本 | v4.4.7-dirty |
 | Flash 大小 | 16 MB |
@@ -104,7 +115,7 @@ python -m platformio run --target upload --upload-port COM<端口号> && python 
 ## 4. 依赖库
 
 | 库 | 版本 | 用途 |
-|----|------|------|
+| --- | --- | --- |
 | `bblanchon/ArduinoJson` | 7.4.3 | JSON 序列化/反序列化 |
 | `knolleary/PubSubClient` | 2.8.0 | MQTT 客户端 |
 | `Preferences` | 2.0.0 (内置) | NVS 持久化存储 |
