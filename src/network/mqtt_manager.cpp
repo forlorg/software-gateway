@@ -107,7 +107,7 @@ void mqtt_subscribe_cb(char *topic, byte *payload, unsigned int len) {
     if (static_cast<unsigned>(len) > n) {
       Serial.print("...");
     }
-    Serial.print("\n");
+    Serial.print("\r\n");
   }
   on_mqtt_download(reinterpret_cast<const uint8_t *>(payload), static_cast<size_t>(len));
 }
@@ -179,7 +179,7 @@ void loop_poll() {
   const char *user = g_user[0] ? g_user : "";
   const char *pass = g_pass[0] ? g_pass : "";
 
-  Serial.printf("[MQTT] connect %s:%u (PubSubClient) client=%s\n", g_host,
+  Serial.printf("[MQTT] connect %s:%u (PubSubClient) client=%s\r\n", g_host,
                 static_cast<unsigned>(g_port), client_id);
 
   const bool ok =
@@ -188,7 +188,7 @@ void loop_poll() {
           : g_mqtt.connect(client_id, user, pass);
 
   if (!ok) {
-    Serial.printf("[MQTT] connect failed rc=%d (see PubSubClient MQTT_*)\n", g_mqtt.state());
+    Serial.printf("[MQTT] connect failed rc=%d (see PubSubClient MQTT_*)\r\n", g_mqtt.state());
     g_next_attempt_ms = now + g_backoff_ms + (ESP.getCycleCount() % 500);
     if (g_backoff_ms < 60000) {
       g_backoff_ms *= 2;
@@ -197,7 +197,7 @@ void loop_poll() {
   }
 
   if (!g_mqtt.subscribe(g_topic_dn, 1)) {
-    Serial.println("[MQTT] subscribe failed");
+    Serial.printf("[MQTT] subscribe failed\r\n");
     g_mqtt.disconnect();
     g_next_attempt_ms = now + g_backoff_ms + (ESP.getCycleCount() % 500);
     if (g_backoff_ms < 60000) {
@@ -211,7 +211,7 @@ void loop_poll() {
   g_backoff_ms = 1000;
   g_next_attempt_ms = 0;
   state_machine::set_state(state_machine::SystemState::MqttReady);
-  Serial.printf("[MQTT] connected; subscribe topic=%s\n", g_topic_dn);
+  Serial.printf("[MQTT] connected; subscribe topic=%s\r\n", g_topic_dn);
 }
 
 bool is_connected() { return g_mqtt_connected && g_mqtt.connected(); }

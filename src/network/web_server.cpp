@@ -165,7 +165,7 @@ void handle_page_system_status() {
   }
   {
     auto item = drive_items.add<JsonObject>();
-    item["name"] = "换向超速锁";
+    item["name"] = "换向控制锁";
     item["value"] = drive.valid ? drive.drive_lock : "-";
   }
   {
@@ -543,7 +543,7 @@ void start() {
 
   g_http.begin();
   refresh_live_json_snapshot();
-  Serial.printf("[HTTP] Arduino WebServer (sync) :%u\n", static_cast<unsigned>(kHttpListenPort));
+  Serial.printf("[HTTP] Arduino WebServer (sync) :%u\r\n", static_cast<unsigned>(kHttpListenPort));
 }
 
 void poll() { g_http.handleClient(); }

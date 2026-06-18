@@ -25,7 +25,7 @@ static constexpr BaseType_t kWebTaskCore = static_cast<BaseType_t>(kPinnedCpuCor
  * 并定期检查剩余堆内存，低于阈值时输出告警日志。
  */
 void task_http_server(void *) {
-  Serial.printf("[%s] task on core %d\n", kLogTag, static_cast<int>(xPortGetCoreID()));
+  Serial.printf("[%s] task on core %d\r\n", kLogTag, static_cast<int>(xPortGetCoreID()));
 
   gateway::web_server::start();
 
@@ -40,7 +40,7 @@ void task_http_server(void *) {
     if (now - last_heap_ms >= kHeapCheckIntervalMs) {
       last_heap_ms = now;
       if (ESP.getFreeHeap() < kHeapWarnMinFreeBytes) {
-        Serial.printf("[%s] heap_low free=%lu\n", kLogTag,
+        Serial.printf("[%s] heap_low free=%lu\r\n", kLogTag,
                       static_cast<unsigned long>(ESP.getFreeHeap()));
       }
     }
@@ -52,7 +52,7 @@ void task_http_server(void *) {
 } // namespace
 
 void start() {
-  Serial.printf("[%s] starting pinned core=%d stack=%lu (sync WebServer)\n", kLogTag,
+  Serial.printf("[%s] starting pinned core=%d stack=%lu (sync WebServer)\r\n", kLogTag,
                 static_cast<int>(kWebTaskCore), static_cast<unsigned long>(kTaskStackBytes));
   xTaskCreatePinnedToCore(task_http_server, "HTTP_SRV", kTaskStackBytes, nullptr,
                           static_cast<UBaseType_t>(tskIDLE_PRIORITY + 2), nullptr, kWebTaskCore);

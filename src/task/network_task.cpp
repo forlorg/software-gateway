@@ -28,7 +28,7 @@ static constexpr uint32_t kNetworkLoopDelayMs = 40;
  * 以及 MQTT 客户端连接/收发维护，按固定周期让出 CPU。
  */
 void task_network(void *) {
-  Serial.printf("[%s] task on core %d\n", kLogTag, static_cast<int>(xPortGetCoreID()));
+  Serial.printf("[%s] task on core %d\r\n", kLogTag, static_cast<int>(xPortGetCoreID()));
 
   wifi_manager::start();
   for (;;) {
@@ -42,7 +42,7 @@ void task_network(void *) {
 } // namespace
 
 void start() {
-  Serial.printf("[%s] starting Core0 task stack=%lu\n", kLogTag,
+  Serial.printf("[%s] starting Core0 task stack=%lu\r\n", kLogTag,
                 static_cast<unsigned long>(kTaskStackBytes));
   xTaskCreatePinnedToCore(task_network, "NET_TASK", kTaskStackBytes, nullptr,
                           static_cast<UBaseType_t>(tskIDLE_PRIORITY + 1), nullptr, kPinnedCore);

@@ -17,7 +17,7 @@ const char kIndexHtml[] PROGMEM = R"rawliteral(
     <main class="shell">
       <header class="hero">
         <div>
-          <p class="eyebrow">PSPRO CAN Gateway</p>
+          <p class="eyebrow">PSPRO CAN Gateway <span id="fw-version"></span></p>
           <h1>网关控制台</h1>
           <p>
             请连接设备热点 <code>PSPRO-xxxx</code>（默认密码
@@ -156,7 +156,8 @@ const char kIndexHtml[] PROGMEM = R"rawliteral(
 const char kStyleCss[] PROGMEM = R"rawliteral(:root{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#182033;background:#eef3f8}body{margin:0}.shell{max-width:1080px;margin:0 auto;padding:24px}.hero{display:flex;justify-content:space-between;gap:16px;align-items:center;background:linear-gradient(135deg,#173b73,#2681c9);color:white;border-radius:20px;padding:24px;box-shadow:0 12px 36px #173b7333}.hero h1{margin:.2em 0}.eyebrow{letter-spacing:.12em;text-transform:uppercase;opacity:.75}.status-pill{background:#ffffff22;border:1px solid #ffffff55;border-radius:999px;padding:10px 14px;white-space:nowrap}.tabs{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:18px 0}.tab{border:0;border-radius:14px;padding:14px 8px;background:white;color:#2d3b55;font-weight:700;box-shadow:0 4px 16px #1b355214}.tab.active{background:#1d75bd;color:white}.page{display:none}.page.active{display:block}.card{background:white;border-radius:18px;padding:18px;margin:14px 0;box-shadow:0 6px 22px #1b355214}.cards.two{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}.group-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px}.switch-group h3{margin-top:0}.switch-row{display:flex;justify-content:space-between;gap:12px;padding:11px 0;border-top:1px solid #edf1f5}.switch-row:first-of-type{border-top:0}.value{font-weight:800;color:#115c9c}.kv{display:grid;grid-template-columns:minmax(120px,1fr) 1.2fr;gap:8px 14px}.kv dt{color:#6e7788}.kv dd{margin:0;font-weight:700}.muted{color:#657084}label{display:block;margin:10px 0;color:#46536a}input{box-sizing:border-box;width:min(100%,320px);padding:10px;border:1px solid #cfd8e5;border-radius:10px}button{cursor:pointer;border:0;border-radius:12px;padding:10px 14px;background:#e7eef7;color:#1f3657;font-weight:700}.primary{background:#1d75bd;color:white}.result{white-space:pre-wrap;background:#101827;color:#dbeafe;border-radius:12px;padding:12px;min-height:24px;overflow:auto}.cal-row{display:grid;grid-template-columns:1.2fr 1fr 1fr;gap:10px;align-items:center;padding:10px 0;border-top:1px solid #edf1f5}.cal-row.header{font-weight:800;color:#657084;border-top:0}.clutch-cards{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.clutch-card{background:white;border-radius:18px;padding:18px;box-shadow:0 6px 22px #1b355214}.clutch-card h3{margin:0 0 8px;color:#173b73}.clutch-card .cur-val{margin:8px 0;font-size:1.05em}.clutch-card .cur-val span{font-weight:800;color:#115c9c}.clutch-card input{width:100%;max-width:100%;margin:8px 0}.clutch-card .btn-row{display:flex;align-items:center;gap:10px;margin-top:4px}.clutch-card .feedback{font-size:.88em;margin-top:6px;min-height:20px}@media(max-width:720px){.shell{padding:12px}.hero{display:block}.tabs{grid-template-columns:repeat(2,1fr)}.cards.two{grid-template-columns:1fr}.kv{grid-template-columns:1fr}.cal-row{grid-template-columns:1fr}.clutch-cards{grid-template-columns:1fr}})rawliteral";
 
 const char kAppJs[] PROGMEM = R"rawliteral(
-const POLL_MS = 2000;
+const POLL_MS = 1000;
+const VERSION_POLL_MS = 5000;
 
 let activePage = 'system';
 let pollTimer = 0;
@@ -192,6 +193,16 @@ function startPoll() {
   stopPoll();
   pollCurrent();
   pollTimer = setInterval(pollCurrent, POLL_MS);
+}
+
+async function pollVersion() {
+  try {
+    const d = await getJson('/api/version');
+    const v = d.version || '';
+    setText('fw-version', v ? 'v' + v : '');
+  } catch (e) {
+    // 版本接口静默失败，不影响页面其它功能。
+  }
 }
 
 document.querySelectorAll('.tab').forEach((button) => {
@@ -520,6 +531,8 @@ async function flashFirmware() {
 $('btn-flash-fw').addEventListener('click', flashFirmware);
 
 startPoll();
+setInterval(pollVersion, VERSION_POLL_MS);
+pollVersion();
 )rawliteral";
 
 } // namespace gateway::web_assets

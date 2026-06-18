@@ -107,7 +107,7 @@ void sample_and_print_load() {
   const size_t      min_free_heap    = heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT);
   const size_t      largest_free_blk = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
 
-  Serial.printf(" | tasks=%lu | heap=%u B min=%u B max_blk=%u B\n",
+  Serial.printf(" | tasks=%lu | heap=%u B min=%u B max_blk=%u B\r\n",
                 static_cast<unsigned long>(task_count),
                 static_cast<unsigned int>(free_heap),
                 static_cast<unsigned int>(min_free_heap),
@@ -127,7 +127,7 @@ void task_monitor(void *) {
   timerAlarmWrite(g_timer, kTimerAlarmUs, true);            // 1 ms, 自动重载
   timerAlarmEnable(g_timer);
 
-  Serial.printf("[%s] ISR-based load monitor started, core=%d, rate=1000Hz\n",
+  Serial.printf("[%s] ISR-based load monitor started, core=%d, rate=1000Hz\r\n",
                 kLogTag, static_cast<int>(xPortGetCoreID()));
 
   for (;;) {
@@ -139,7 +139,7 @@ void task_monitor(void *) {
 } // namespace
 
 void start() {
-  Serial.printf("[%s] starting pinned core=%d stack=%lu\n", kLogTag, kPinnedCore,
+  Serial.printf("[%s] starting pinned core=%d stack=%lu\r\n", kLogTag, kPinnedCore,
                 static_cast<unsigned long>(kTaskStackBytes));
   xTaskCreatePinnedToCore(task_monitor, "sys_load_mon", kTaskStackBytes, nullptr,
                           static_cast<UBaseType_t>(tskIDLE_PRIORITY + 1), nullptr,

@@ -34,10 +34,14 @@ void setup() {
   USBSerial.begin(921600);
 #endif
   delay(200);
-  Serial.println();
-  Serial.printf("[%s] model=%s, cpu=%u MHz, flash=%u B, heap_free=%u B, sdk=%s\n", kSysTag,
-                ESP.getChipModel(), static_cast<unsigned>(ESP.getCpuFreqMHz()),
-                ESP.getFlashChipSize(), static_cast<unsigned>(ESP.getFreeHeap()), ESP.getSdkVersion());
+  Serial.print("\r\n");
+  Serial.printf("[%s] model=%s, cpu=%u MHz, flash=%u B, heap_free=%u B, sdk=%s\r\n",
+                kSysTag,
+                ESP.getChipModel(),
+                static_cast<unsigned>(ESP.getCpuFreqMHz()),
+                static_cast<unsigned>(ESP.getFlashChipSize()),
+                static_cast<unsigned>(ESP.getFreeHeap()),
+                ESP.getSdkVersion());
 
   gateway::ctx::init();
 

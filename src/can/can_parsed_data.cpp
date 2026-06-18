@@ -165,7 +165,7 @@ bool id_in_list(uint32_t id, const uint32_t *ids, size_t count) {
 //     Serial.printf("%02X", data[i]);
 //     if (i + 1 < dlc) Serial.print(' ');
 //   }
-//   Serial.println();
+//   Serial.print("\r\n");
 // }
 
 bool frame_allowed_for_selected_source(uint32_t id) {
@@ -183,7 +183,7 @@ void process_product_announce(uint32_t id, const uint8_t *data, uint8_t dlc) {
   if (!is_product_announce(id)) return;
   if (gateway::ctx::set_product_id_from_payload_le(data, dlc)) {
     gateway::mqtt_manager::notify_product_id_changed();
-    Serial.printf("[%s] id=0x%08lX product_id updated\n", kTag, static_cast<unsigned long>(id));
+    Serial.printf("[%s] id=0x%08lX product_id updated\r\n", kTag, static_cast<unsigned long>(id));
   }
 }
 
@@ -333,7 +333,7 @@ void parse_frame_1700(uint32_t id, const uint8_t *data, uint8_t dlc) {
   g_drive_solenoid_high_ms  = now;
   portEXIT_CRITICAL(&g_lock);
 
-  // Serial.printf("[%s] id=0x%08lX drive_solenoid_high=%u mA\n", kTag,
+  // Serial.printf("[%s] id=0x%08lX drive_solenoid_high=%u mA\r\n", kTag,
   //                static_cast<unsigned long>(id), static_cast<unsigned>(raw_solenoid));
 }
 
@@ -355,7 +355,7 @@ void parse_frame_1701(uint32_t id, const uint8_t *data, uint8_t dlc) {
   g_drive_solenoid_low_ms  = now;
   portEXIT_CRITICAL(&g_lock);
 
-  // Serial.printf("[%s] id=0x%08lX drive_solenoid_low=%u mA\n", kTag,
+  // Serial.printf("[%s] id=0x%08lX drive_solenoid_low=%u mA\r\n", kTag,
   //               static_cast<unsigned long>(id), static_cast<unsigned>(raw_solenoid));
 }
 
@@ -377,7 +377,7 @@ void parse_frame_1702(uint32_t id, const uint8_t *data, uint8_t dlc) {
   g_drive_solenoid_reverse_ms  = now;
   portEXIT_CRITICAL(&g_lock);
 
-  // Serial.printf("[%s] id=0x%08lX drive_solenoid_reverse=%u mA\n", kTag,
+  // Serial.printf("[%s] id=0x%08lX drive_solenoid_reverse=%u mA\r\n", kTag,
   //                static_cast<unsigned long>(id), static_cast<unsigned>(raw_solenoid));
 }
 
@@ -402,7 +402,7 @@ void parse_frame_1703(uint32_t id, const uint8_t *data, uint8_t dlc) {
   g_pto_solenoid_last_ms = now;
   portEXIT_CRITICAL(&g_lock);
 
-  // Serial.printf("[%s] id=0x%08lX pto_solenoid=%u mA\n", kTag,
+  // Serial.printf("[%s] id=0x%08lX pto_solenoid=%u mA\r\n", kTag,
   //               static_cast<unsigned long>(id), static_cast<unsigned>(raw_solenoid));
 }
 
@@ -476,7 +476,7 @@ void parse_frame_1712(uint32_t id, const uint8_t *data, uint8_t dlc) {
   // 物理值 = raw * 0.002 %
   const float slip_pct = static_cast<float>(raw_clutch_slip) * 0.002f;
 
-  // Serial.printf("[%s] id=0x%08lX clutch_slip=%u raw (phys=%.3f %%)\n", kTag,
+  // Serial.printf("[%s] id=0x%08lX clutch_slip=%u raw (phys=%.3f %%)\r\n", kTag,
   //               static_cast<unsigned long>(id), static_cast<unsigned>(raw_clutch_slip),
   //               static_cast<double>(slip_pct));
 }
@@ -562,7 +562,7 @@ void init() {
   delay(2);
   const int level = digitalRead(static_cast<uint8_t>(kSourceSelectGpio));
 
-  Serial.printf("[%s] GPIO15 level=%d\n", kTag, level);
+  Serial.printf("[%s] GPIO15 level=%d\r\n", kTag, level);
   portENTER_CRITICAL(&g_lock);
   g_source_channel = (level == HIGH) ? SourceChannel::kChannel1 : SourceChannel::kChannel0;
   // ----------------------------------------------------------------------------
@@ -608,7 +608,7 @@ void init() {
   g_clutch_pto_last_ms   = 0;
   portEXIT_CRITICAL(&g_lock);
 
-  Serial.printf("[%s] GPIO15 level=%d, selected source=%s\n", kTag, level, source_channel_name());
+  Serial.printf("[%s] GPIO15 level=%d, selected source=%s\r\n", kTag, level, source_channel_name());
 }
 
 SourceChannel source_channel() {

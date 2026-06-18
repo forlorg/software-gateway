@@ -24,7 +24,7 @@ static constexpr BaseType_t kPinnedCore = static_cast<BaseType_t>(1);
  */
 void task_heartbeat_led(void *) {
   const int pin = kHeartbeatLedPin;
-  Serial.printf("[%s] task on core %d\n", kLogTag, xPortGetCoreID());
+  Serial.printf("[%s] task on core %d\r\n", kLogTag, xPortGetCoreID());
   if (pin >= 0) {
     pinMode(pin, OUTPUT);
     digitalWrite(pin, kHeartbeatLedActiveHigh ? LOW : HIGH);
@@ -46,10 +46,10 @@ void task_heartbeat_led(void *) {
 
 void start() {
   if (kHeartbeatLedPin < 0) {
-    Serial.printf("[%s] disabled (kHeartbeatLedPin < 0)\n", kLogTag);
+    Serial.printf("[%s] disabled (kHeartbeatLedPin < 0)\r\n", kLogTag);
     return;
   }
-  Serial.printf("[%s] starting Core1 task, GPIO %d, half-period %lu ms, active_high=%d\n", kLogTag,
+  Serial.printf("[%s] starting Core1 task, GPIO %d, half-period %lu ms, active_high=%d\r\n", kLogTag,
                 kHeartbeatLedPin, static_cast<unsigned long>(kHeartbeatBlinkHalfPeriodMs),
                 kHeartbeatLedActiveHigh ? 1 : 0);
   xTaskCreatePinnedToCore(task_heartbeat_led, "HB_LED", kStackBytes, nullptr,

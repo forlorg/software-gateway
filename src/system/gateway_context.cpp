@@ -65,7 +65,7 @@ bool set_product_id_from_payload_le(const uint8_t *payload, size_t len) {
       memcpy(g_product_hex, hex, 9);
       g_has_pid = true;
       changed = true;
-      Serial.printf("[GW_CTX] device_product_id=%s\n", g_product_hex);
+      Serial.printf("[GW_CTX] device_product_id=%s\r\n", g_product_hex);
     }
     xSemaphoreGive(g_mu);
   }

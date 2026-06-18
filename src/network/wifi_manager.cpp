@@ -83,7 +83,7 @@ void drain_pending_disconnect() {
   vTaskDelay(pdMS_TO_TICKS(40));
   g_sta = StaFsm::Idle;
   g_block_auto_saved_sta = true;
-  Serial.println("[WIFI_STA] STA disconnected by user (NVS kept; no auto saved reconnect until form)");
+  Serial.print("[WIFI_STA] STA disconnected by user (NVS kept; no auto saved reconnect until form)\r\n");
   gateway::state_machine::set_state(gateway::state_machine::SystemState::WifiApMode);
   gateway::provision::notify_sta_user_disconnected();
 }
@@ -191,8 +191,10 @@ void setup_ap() {
   snprintf(ssid_ap, sizeof(ssid_ap), "PSPRO-%04X", suf);
   WiFi.softAP(ssid_ap, "12345678");
   IPAddress ap = WiFi.softAPIP();
-  Serial.printf("[AP] SoftAP SSID=%s  配网 http://%s:%u/\n", ssid_ap, ap.toString().c_str(),
-                static_cast<unsigned>(gateway::web_server::kHttpListenPort));
+  Serial.printf("[AP] SoftAP SSID=%s config portal http://%s:%u/\r\n",
+              ssid_ap,
+              ap.toString().c_str(),
+              static_cast<unsigned>(gateway::web_server::kHttpListenPort));
 }
 
 bool try_start_sta_saved() {
@@ -223,7 +225,7 @@ void start() {
   WiFi.disconnect(true, true);
   setup_ap();
   if (!try_start_sta_saved()) {
-    Serial.println("[WIFI_STA] No saved credentials; use captive portal on SoftAP.");
+    Serial.print("[WIFI_STA] No saved credentials; use captive portal on SoftAP.\r\n");
     g_sta = StaFsm::Idle;
     gateway::state_machine::set_state(gateway::state_machine::SystemState::WifiApMode);
   }
@@ -268,19 +270,19 @@ void loop() {
   if (g_sta == StaFsm::Connected && st != WL_CONNECTED) {
     g_sta = StaFsm::Idle;
     g_block_auto_saved_sta = false;
-    Serial.println("[WIFI_STA] link lost, retry saved profile");
+    Serial.print("[WIFI_STA] link lost, retry saved profile\r\n");
     gateway::state_machine::set_state(gateway::state_machine::SystemState::WifiLost);
     try_start_sta_saved();
   }
 
   if (g_sta == StaFsm::Connecting) {
     if (st != g_last_st) {
-      Serial.printf("[WIFI_STA] status=%d\n", static_cast<int>(st));
+      Serial.printf("[WIFI_STA] status=%d\r\n", static_cast<int>(st));
       g_last_st = st;
     }
     if (st == WL_CONNECTED) {
       g_sta = StaFsm::Connected;
-      Serial.printf("[WIFI_STA] STA IP=%s RSSI=%d AP仍保持\n", WiFi.localIP().toString().c_str(),
+      Serial.printf("[WIFI_STA] STA IP=%s RSSI=%d AP still connected\r\n", WiFi.localIP().toString().c_str(),
                     WiFi.RSSI());
       gateway::state_machine::set_state(gateway::state_machine::SystemState::WifiStaConnected);
       gateway::provision::notify_wifi_sta_linked();
@@ -288,7 +290,7 @@ void loop() {
       WiFi.disconnect(false);
       g_sta = StaFsm::Idle;
       g_block_auto_saved_sta = true;
-      Serial.println("[WIFI_STA] connect timeout (check password / router)");
+      Serial.print("[WIFI_STA] connect timeout (check password / router)\r\n");
       gateway::state_machine::set_state(gateway::state_machine::SystemState::WifiApMode);
       gateway::provision::notify_wifi_sta_failed("sta_timeout");
     } else {

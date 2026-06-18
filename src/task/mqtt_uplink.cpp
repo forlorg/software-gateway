@@ -27,7 +27,7 @@ void log_vehicle_upload_topic_once() {
     return;
   }
   logged = true;
-  Serial.printf("[MQTT uplink] publish topic=%s (first publish only)\n",
+  Serial.printf("[MQTT uplink] publish topic=%s (first publish only)\r\n",
                 mqtt_manager::vehicle_upload_topic());
 }
 } // namespace
