@@ -223,10 +223,10 @@ PowerShuttleState compute_power_shuttle_state(uint8_t direction_raw, uint8_t gea
  */
 const char *state_machine_to_string(uint8_t raw) {
   switch (raw) {
-    case 0:  return "INIT";
-    case 1:  return "LOCK";
-    case 2:  return "RUNING";
-    default: return "OTHER";
+    case 0:  return "初始化";
+    case 1:  return "锁定";
+    case 2:  return "运行";
+    default: return "其它";
   }
 }
 
@@ -235,11 +235,11 @@ const char *state_machine_to_string(uint8_t raw) {
  */
 const char *power_shuttle_to_string(PowerShuttleState s) {
   switch (s) {
-    case PowerShuttleState::kStop:        return "STOP";
-    case PowerShuttleState::kForwardHigh: return "HIGH";
-    case PowerShuttleState::kForwardLow:  return "LOW";
-    case PowerShuttleState::kReverse:     return "REVERSE";
-    default:                              return "UNKNOWN";
+    case PowerShuttleState::kStop:        return "停止";
+    case PowerShuttleState::kForwardHigh: return "高档";
+    case PowerShuttleState::kForwardLow:  return "低档";
+    case PowerShuttleState::kReverse:     return "倒档";
+    default:                              return "未知";
   }
 }
 
