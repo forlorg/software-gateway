@@ -23,6 +23,8 @@
 #include "system/state_machine.h"
 #include "system/statistics.h"
 #include "system/time_sync.h"
+#include "system/version.h"
+#include "system/ota_manager.h"
 #include "task/mqtt_uplink.h"
 
 namespace gateway::web_server {
@@ -291,7 +293,12 @@ void handle_calibration_submit() {
   g_http.send(200, "application/json; charset=utf-8", "{\"ok\":true}");
 }
 
+// OTA guard forward declarations (defined later in OTA API injection block)
+bool reject_if_ota_in_progress();
+
 void handle_wifi_connect() {
+  if (reject_if_ota_in_progress()) { return; }
+
   if (!g_http.hasArg("plain")) {
     g_http.send(400, "application/json; charset=utf-8", "{\"ok\":false,\"error\":\"body\"}");
     return;
@@ -315,6 +322,8 @@ void handle_wifi_connect() {
 }
 
 void handle_mqtt_config() {
+  if (reject_if_ota_in_progress()) { return; }
+
   if (!g_http.hasArg("plain")) {
     g_http.send(400, "application/json; charset=utf-8", "{\"ok\":false,\"error\":\"body\"}");
     return;
@@ -362,6 +371,8 @@ void handle_wifi_scan() {
 }
 
 void handle_factory_reset() {
+  if (reject_if_ota_in_progress()) { return; }
+
   gateway::config_store::factory_reset();
   g_http.send(200, "application/json; charset=utf-8", "{\"ok\":true}");
   delay(200);
@@ -397,6 +408,78 @@ void handle_flash_firmware() {
     g_http.send(500, "application/json; charset=utf-8", "{\"ok\":false,\"error\":\"enqueue failed\"}");
   }
 }
+
+// ===== OTA API injection begin =====
+void send_ota_busy_error() {
+  g_http.send(409, "application/json; charset=utf-8",
+              "{\"ok\":false,\"error\":\"ota_in_progress\"}");
+}
+
+bool reject_if_ota_in_progress() {
+  if (gateway::ota::update_in_progress()) {
+    send_ota_busy_error();
+    return true;
+  }
+  return false;
+}
+
+void handle_api_version() {
+  JsonDocument doc;
+  doc["project"] = gateway::version::project_name();
+  doc["version"] = gateway::version::firmware_version();
+  doc["build"] = gateway::version::firmware_build();
+  doc["hw"] = gateway::version::hardware();
+  doc["channel"] = gateway::version::channel();
+  doc["build_time"] = gateway::version::build_time();
+  doc["flash_size"] = ESP.getFlashChipSize();
+  doc["psram_size"] = ESP.getPsramSize();
+  doc["free_heap"] = ESP.getFreeHeap();
+
+  char stack[768];
+  send_json_doc(doc, stack, sizeof(stack));
+}
+
+void handle_ota_status() {
+  const auto s = gateway::ota::status();
+
+  JsonDocument doc;
+  doc["state"] = gateway::ota::state_string(s.state);
+  doc["update_available"] = s.update_available;
+  doc["update_in_progress"] = s.update_in_progress;
+  doc["progress"] = s.progress;
+  doc["current_version"] = s.current_version;
+  doc["current_build"] = s.current_build;
+  doc["latest_version"] = s.latest_version;
+  doc["latest_build"] = s.latest_build;
+  doc["last_error"] = s.last_error;
+
+  char stack[768];
+  send_json_doc(doc, stack, sizeof(stack));
+}
+
+void handle_ota_check() {
+  if (gateway::ota::request_check_now()) {
+    g_http.send(200, "application/json; charset=utf-8",
+                "{\"ok\":true,\"message\":\"ota_check_requested\"}");
+    return;
+  }
+
+  g_http.send(409, "application/json; charset=utf-8",
+              "{\"ok\":false,\"error\":\"ota_busy_or_too_soon\"}");
+}
+
+void handle_ota_upgrade() {
+  if (gateway::ota::request_upgrade_now()) {
+    g_http.send(200, "application/json; charset=utf-8",
+                "{\"ok\":true,\"message\":\"ota_upgrade_requested\"}");
+    return;
+  }
+
+  g_http.send(409, "application/json; charset=utf-8",
+              "{\"ok\":false,\"error\":\"ota_busy\"}");
+}
+// ===== OTA API injection end =====
+
 
 } // namespace
 
@@ -438,6 +521,10 @@ void start() {
   });
 
   g_http.on("/api/live_state", HTTP_GET, handle_live_state);
+  g_http.on("/api/version", HTTP_GET, handle_api_version);
+  g_http.on("/api/ota/status", HTTP_GET, handle_ota_status);
+  g_http.on("/api/ota/check", HTTP_POST, handle_ota_check);
+  g_http.on("/api/ota/upgrade", HTTP_POST, handle_ota_upgrade);
   g_http.on("/api/page/system_status", HTTP_GET, handle_page_system_status);
   g_http.on("/api/page/calibration", HTTP_GET, handle_page_calibration);
   g_http.on("/api/page/traffic_stats", HTTP_GET, handle_page_traffic_stats);

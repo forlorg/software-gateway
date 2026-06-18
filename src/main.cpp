@@ -17,6 +17,7 @@
 
 #include "network/mqtt_manager.h"
 #include "task/mqtt_uplink.h"
+#include "task/ota_task.h"
 
 static constexpr const char kSysTag[] = "GW_SYS";
 
@@ -52,9 +53,10 @@ void setup() {
   gateway::http_server_task::start();
   gateway::heartbeat_led::start();
 
-  gateway::uart2_test_task::start();
+  // gateway::uart2_test_task::start();
 
   gateway::can_driver::start();
+  gateway::ota_task::start();
 }
 
 /** 主循环留空；业务在 FreeRTOS 任务与 `wifi_ap_task` 内轮询中运行。 */
