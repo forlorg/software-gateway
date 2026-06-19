@@ -7,8 +7,8 @@
 
 namespace gateway::web_assets {
 
-extern const char kIndexHtml[];
-extern const char kStyleCss[];
-extern const char kAppJs[];
+    extern const char kIndexHtml[];
+    extern const char kStyleCss[];
+    extern const char kAppJs[];
 
 } // namespace gateway::web_assets

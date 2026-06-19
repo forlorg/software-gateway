@@ -7,13 +7,13 @@
 
 namespace gateway::can_hw {
 
-constexpr int kRxPin = 5;
-constexpr int kTxPin = 4;
+    constexpr int kRxPin = 5;
+    constexpr int kTxPin = 4;
 
 } // namespace gateway::can_hw
 
 namespace gateway::can_driver {
 
-void start();
+    void start();
 
 } // namespace gateway::can_driver

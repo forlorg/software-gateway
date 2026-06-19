@@ -9,16 +9,16 @@
 
 namespace gateway::http_server_task {
 
-constexpr uint32_t kHeapWarnMinFreeBytes = 30 * 1024;
+    constexpr uint32_t kHeapWarnMinFreeBytes = 30 * 1024;
 
-constexpr uint32_t kTaskStackBytes = 8192;
+    constexpr uint32_t kTaskStackBytes = 8192;
 
-/** 同步 WebServer::handleClient() 所在 CPU 核。 */
-constexpr int kPinnedCpuCoreIndex = 0;
+    /** 同步 WebServer::handleClient() 所在 CPU 核。 */
+    constexpr int kPinnedCpuCoreIndex = 0;
 
-constexpr uint32_t kLoopDelayMs = 40;
-constexpr uint32_t kHeapCheckIntervalMs = 2000;
+    constexpr uint32_t kLoopDelayMs = 40;
+    constexpr uint32_t kHeapCheckIntervalMs = 2000;
 
-void start();
+    void start();
 
 } // namespace gateway::http_server_task

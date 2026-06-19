@@ -9,11 +9,11 @@
 
 namespace gateway::web_server {
 
-constexpr uint16_t kHttpListenPort = 80;
+    constexpr uint16_t kHttpListenPort = 80;
 
-void start();
+    void start();
 
-/** 每圈调用一次 `handleClient()`（仅用于同步 WebServer）。 */
-void poll();
+    /** 每圈调用一次 `handleClient()`（仅用于同步 WebServer）。 */
+    void poll();
 
 } // namespace gateway::web_server

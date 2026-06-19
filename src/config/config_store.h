@@ -9,13 +9,13 @@
 
 namespace gateway::config_store {
 
-bool begin();
-void factory_reset();
+    bool begin();
+    void factory_reset();
 
-bool wifi_get(String &ssid, String &password);
-bool wifi_set(const String &ssid, const String &password);
+    bool wifi_get(String &ssid, String &password);
+    bool wifi_set(const String &ssid, const String &password);
 
-bool mqtt_get(String &host, uint16_t &port, String &user, String &pass);
-bool mqtt_set(const String &host, uint16_t port, const String &user, const String &pass);
+    bool mqtt_get(String &host, uint16_t &port, String &user, String &pass);
+    bool mqtt_set(const String &host, uint16_t port, const String &user, const String &pass);
 
 } // namespace gateway::config_store

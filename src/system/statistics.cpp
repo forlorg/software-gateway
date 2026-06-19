@@ -8,36 +8,36 @@
 
 namespace gateway::statistics {
 
-namespace {
-uint32_t g_boot_ms{};
-uint32_t g_can_rx;
-uint32_t g_can_tx;
-uint32_t g_mqtt_tx;
-uint32_t g_mqtt_rx;
-uint32_t g_dropped;
-uint32_t g_serial_mirror_queue_drops;
-} // namespace
+    namespace {
+        uint32_t g_boot_ms{};
+        uint32_t g_can_rx;
+        uint32_t g_can_tx;
+        uint32_t g_mqtt_tx;
+        uint32_t g_mqtt_rx;
+        uint32_t g_dropped;
+        uint32_t g_serial_mirror_queue_drops;
+    } // namespace
 
-void add_can_rx(uint32_t n) { g_can_rx += n; }
-void add_can_tx(uint32_t n) { g_can_tx += n; }
-void add_mqtt_tx(uint32_t n) { g_mqtt_tx += n; }
-void add_mqtt_rx(uint32_t n) { g_mqtt_rx += n; }
-void add_dropped(uint32_t n) { g_dropped += n; }
-void add_serial_mirror_queue_drops(uint32_t n) { g_serial_mirror_queue_drops += n; }
+    void add_can_rx(uint32_t n) { g_can_rx += n; }
+    void add_can_tx(uint32_t n) { g_can_tx += n; }
+    void add_mqtt_tx(uint32_t n) { g_mqtt_tx += n; }
+    void add_mqtt_rx(uint32_t n) { g_mqtt_rx += n; }
+    void add_dropped(uint32_t n) { g_dropped += n; }
+    void add_serial_mirror_queue_drops(uint32_t n) { g_serial_mirror_queue_drops += n; }
 
-uint32_t can_rx() { return g_can_rx; }
-uint32_t can_tx() { return g_can_tx; }
-uint32_t mqtt_tx() { return g_mqtt_tx; }
-uint32_t mqtt_rx() { return g_mqtt_rx; }
-uint32_t dropped() { return g_dropped; }
-uint32_t serial_mirror_queue_drops() { return g_serial_mirror_queue_drops; }
+    uint32_t can_rx() { return g_can_rx; }
+    uint32_t can_tx() { return g_can_tx; }
+    uint32_t mqtt_tx() { return g_mqtt_tx; }
+    uint32_t mqtt_rx() { return g_mqtt_rx; }
+    uint32_t dropped() { return g_dropped; }
+    uint32_t serial_mirror_queue_drops() { return g_serial_mirror_queue_drops; }
 
-uint32_t uptime_ms() {
-  if (g_boot_ms == 0) {
-    g_boot_ms = millis();
-    return 0;
-  }
-  return millis() - g_boot_ms;
-}
+    uint32_t uptime_ms() {
+        if (g_boot_ms == 0) {
+            g_boot_ms = millis();
+            return 0;
+        }
+        return millis() - g_boot_ms;
+    }
 
 } // namespace gateway::statistics

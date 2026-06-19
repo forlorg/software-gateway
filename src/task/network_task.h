@@ -9,8 +9,8 @@
 
 namespace gateway::network_task {
 
-constexpr uint32_t kTaskStackBytes = 9216;
+    constexpr uint32_t kTaskStackBytes = 9216;
 
-void start();
+    void start();
 
 } // namespace gateway::network_task

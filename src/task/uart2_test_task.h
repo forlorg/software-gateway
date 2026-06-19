@@ -9,16 +9,16 @@
 
 namespace gateway::uart2_test_task {
 
-/** `Serial2` RX / TX（ESP32-S3，勿与 CAN 4/5、镜像串口 6/7 冲突）。 */
-constexpr int kUart2RxPin = 18;
-constexpr int kUart2TxPin = 17;
-constexpr uint32_t kBaud = 230400;
-constexpr uint32_t kSendPeriodMs = 1000;
+    /** `Serial2` RX / TX（ESP32-S3，勿与 CAN 4/5、镜像串口 6/7 冲突）。 */
+    constexpr int kUart2RxPin = 18;
+    constexpr int kUart2TxPin = 17;
+    constexpr uint32_t kBaud = 230400;
+    constexpr uint32_t kSendPeriodMs = 1000;
 
-/** 监控任务固定在 Core 0 运行，避免因采样自耗导致 Core 1 负载误报 100%。 */
-constexpr int kPinnedCore = 0;
-constexpr uint32_t kTaskStackBytes = 4096;
+    /** 监控任务固定在 Core 0 运行，避免因采样自耗导致 Core 1 负载误报 100%。 */
+    constexpr int kPinnedCore = 0;
+    constexpr uint32_t kTaskStackBytes = 4096;
 
-void start();
+    void start();
 
 } // namespace gateway::uart2_test_task

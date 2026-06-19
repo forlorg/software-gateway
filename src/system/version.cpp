@@ -22,11 +22,11 @@
 
 namespace gateway::version {
 
-const char* project_name() { return FW_PROJECT_NAME; }
-const char* firmware_version() { return FW_VERSION; }
-uint32_t firmware_build() { return FW_BUILD; }
-const char* hardware() { return FW_HW; }
-const char* channel() { return FW_CHANNEL; }
-const char* build_time() { return __DATE__ " " __TIME__; }
+    const char* project_name() { return FW_PROJECT_NAME; }
+    const char* firmware_version() { return FW_VERSION; }
+    uint32_t firmware_build() { return FW_BUILD; }
+    const char* hardware() { return FW_HW; }
+    const char* channel() { return FW_CHANNEL; }
+    const char* build_time() { return __DATE__ " " __TIME__; }
 
 }  // namespace gateway::version

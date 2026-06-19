@@ -2,6 +2,6 @@
 
 namespace gateway::ota_task {
 
-void start();
+    void start();
 
 }  // namespace gateway::ota_task

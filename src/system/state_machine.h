@@ -7,22 +7,22 @@
 
 namespace gateway::state_machine {
 
-/** 与 `software_esp32s3` 对齐的系统状态枚举（含 MQTT 连接态）。 */
-enum class SystemState {
-  Boot,
-  WifiApMode,
-  WifiStaConnecting,
-  WifiStaConnected,
-  MqttConnecting,
-  MqttReady,
-  WifiLost,
-  MqttLost,
-};
+    /** 与 `software_esp32s3` 对齐的系统状态枚举（含 MQTT 连接态）。 */
+    enum class SystemState {
+        Boot,
+        WifiApMode,
+        WifiStaConnecting,
+        WifiStaConnected,
+        MqttConnecting,
+        MqttReady,
+        WifiLost,
+        MqttLost,
+    };
 
-SystemState current();
-void set_state(SystemState s);
+    SystemState current();
+    void set_state(SystemState s);
 
-/** 可读名称，供 `/api/live_state` 展示。 */
-const char *system_state_str(SystemState s);
+    /** 可读名称，供 `/api/live_state` 展示。 */
+    const char *system_state_str(SystemState s);
 
 } // namespace gateway::state_machine

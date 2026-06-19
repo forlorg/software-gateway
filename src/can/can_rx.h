@@ -9,16 +9,16 @@
 
 namespace gateway::can_rx {
 
-/** USB CDC 镜像队列深度；若 `serial_mirror_queue_drops` 持续增长可加大。 */
-constexpr unsigned kSerialMirrorQueueDepth = 24;
+    /** USB CDC 镜像队列深度；若 `serial_mirror_queue_drops` 持续增长可加大。 */
+    constexpr unsigned kSerialMirrorQueueDepth = 24;
 
-constexpr int kMirrorTxTaskCore = 0;
-constexpr uint32_t kMirrorTxTaskStackBytes = 4096;
-constexpr unsigned kMirrorTxTaskPriority = 3;
+    constexpr int kMirrorTxTaskCore = 0;
+    constexpr uint32_t kMirrorTxTaskStackBytes = 4096;
+    constexpr unsigned kMirrorTxTaskPriority = 3;
 
-constexpr int kTaskCore = 1;
-constexpr uint32_t kTaskStackBytes = 6144;
-constexpr unsigned kTaskPriority = 4;
+    constexpr int kTaskCore = 1;
+    constexpr uint32_t kTaskStackBytes = 6144;
+    constexpr unsigned kTaskPriority = 4;
 
 } // namespace gateway::can_rx
 

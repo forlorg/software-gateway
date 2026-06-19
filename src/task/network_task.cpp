@@ -17,74 +17,74 @@
 
 namespace gateway::network_task {
 
-namespace {
+    namespace {
 
-static constexpr const char kLogTag[] = "NET_TASK";
-static constexpr BaseType_t kPinnedCore = static_cast<BaseType_t>(0);
-static constexpr uint32_t kNetworkLoopDelayMs = 40;
+        static constexpr const char kLogTag[] = "NET_TASK";
+        static constexpr BaseType_t kPinnedCore = static_cast<BaseType_t>(0);
+        static constexpr uint32_t kNetworkLoopDelayMs = 40;
 
-/**
- * 根据 Wi-Fi STA 和 MQTT 连接状态更新 GPIO2 网络状态灯。
- *
- * 优先级：
- * - Wi-Fi 未连接：熄灭。
- * - Wi-Fi 已连接且 MQTT 已连接：快闪。
- * - Wi-Fi 已连接但 MQTT 未连接：慢闪。
- */
-void update_network_led_mode() {
-    if (!wifi_manager::sta_is_linked()) {
-        status_led::set_network_mode(status_led::NetworkLedMode::Off);
-        return;
+        /**
+         * 根据 Wi-Fi STA 和 MQTT 连接状态更新 GPIO2 网络状态灯。
+         *
+         * 优先级：
+         * - Wi-Fi 未连接：熄灭。
+         * - Wi-Fi 已连接且 MQTT 已连接：快闪。
+         * - Wi-Fi 已连接但 MQTT 未连接：慢闪。
+         */
+        void update_network_led_mode() {
+            if (!wifi_manager::sta_is_linked()) {
+                status_led::set_network_mode(status_led::NetworkLedMode::Off);
+                return;
+            }
+
+            if (mqtt_manager::is_connected()) {
+                status_led::set_network_mode(
+                    status_led::NetworkLedMode::MqttConnected);
+                return;
+            }
+
+            status_led::set_network_mode(
+                status_led::NetworkLedMode::WifiConnected);
+        }
+
+        /**
+         * 网络轮询任务：启动 Wi-Fi 管理器后持续处理 SoftAP/STA 配网状态、SNTP 时间同步轮询、
+         * MQTT 客户端连接/收发维护，并在同一 Core0 上更新网络状态灯模式。
+         */
+        void task_network(void *) {
+            Serial.printf(
+                "[%s] task on core %d\r\n",
+                kLogTag,
+                static_cast<int>(xPortGetCoreID()));
+
+            wifi_manager::start();
+
+            for (;;) {
+                wifi_manager::loop();
+                gateway::time_sync::loop_poll();
+                gateway::mqtt_manager::loop_poll();
+                update_network_led_mode();
+
+                vTaskDelay(pdMS_TO_TICKS(kNetworkLoopDelayMs));
+            }
+        }
+
+    } // namespace
+
+    void start() {
+        Serial.printf(
+            "[%s] starting Core0 task stack=%lu\r\n",
+            kLogTag,
+            static_cast<unsigned long>(kTaskStackBytes));
+
+        xTaskCreatePinnedToCore(
+            task_network,
+            "NET_TASK",
+            kTaskStackBytes,
+            nullptr,
+            static_cast<UBaseType_t>(tskIDLE_PRIORITY + 1),
+            nullptr,
+            kPinnedCore);
     }
-
-    if (mqtt_manager::is_connected()) {
-        status_led::set_network_mode(
-            status_led::NetworkLedMode::MqttConnected);
-        return;
-    }
-
-    status_led::set_network_mode(
-        status_led::NetworkLedMode::WifiConnected);
-}
-
-/**
- * 网络轮询任务：启动 Wi-Fi 管理器后持续处理 SoftAP/STA 配网状态、SNTP 时间同步轮询、
- * MQTT 客户端连接/收发维护，并在同一 Core0 上更新网络状态灯模式。
- */
-void task_network(void *) {
-    Serial.printf(
-        "[%s] task on core %d\r\n",
-        kLogTag,
-        static_cast<int>(xPortGetCoreID()));
-
-    wifi_manager::start();
-
-    for (;;) {
-        wifi_manager::loop();
-        gateway::time_sync::loop_poll();
-        gateway::mqtt_manager::loop_poll();
-        update_network_led_mode();
-
-        vTaskDelay(pdMS_TO_TICKS(kNetworkLoopDelayMs));
-    }
-}
-
-} // namespace
-
-void start() {
-    Serial.printf(
-        "[%s] starting Core0 task stack=%lu\r\n",
-        kLogTag,
-        static_cast<unsigned long>(kTaskStackBytes));
-
-    xTaskCreatePinnedToCore(
-        task_network,
-        "NET_TASK",
-        kTaskStackBytes,
-        nullptr,
-        static_cast<UBaseType_t>(tskIDLE_PRIORITY + 1),
-        nullptr,
-        kPinnedCore);
-}
 
 } // namespace gateway::network_task

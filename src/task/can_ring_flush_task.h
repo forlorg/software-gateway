@@ -14,21 +14,21 @@
  */
 namespace gateway::can_ring_flush {
 
-namespace config {
-constexpr size_t kRingBufferBytes = 48 * 1024;
-constexpr uint32_t kAggregateMsNormal = 500;
-constexpr uint32_t kAggregateMsFast = 200;
-constexpr size_t kHighWaterBytes = 20 * 1024;
-constexpr size_t kMaxBatchBytes = 4096;
-constexpr int kTaskCore = 1;
-constexpr uint32_t kTaskStackBytes = 8192;
-constexpr unsigned kTaskPriority = 2;
-} // namespace config
+    namespace config {
+        constexpr size_t kRingBufferBytes = 48 * 1024;
+        constexpr uint32_t kAggregateMsNormal = 500;
+        constexpr uint32_t kAggregateMsFast = 200;
+        constexpr size_t kHighWaterBytes = 20 * 1024;
+        constexpr size_t kMaxBatchBytes = 4096;
+        constexpr int kTaskCore = 1;
+        constexpr uint32_t kTaskStackBytes = 8192;
+        constexpr unsigned kTaskPriority = 2;
+    } // namespace config
 
-void begin();
+    void begin();
 
-bool offer_at_binary(const uint8_t *line, uint16_t len);
+    bool offer_at_binary(const uint8_t *line, uint16_t len);
 
-uint32_t ring_used_bytes();
+    uint32_t ring_used_bytes();
 
 } // namespace gateway::can_ring_flush
