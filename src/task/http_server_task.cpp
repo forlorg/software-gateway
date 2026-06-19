@@ -55,7 +55,7 @@ namespace gateway::http_server_task {
         Serial.printf("[%s] starting pinned core=%d stack=%lu (sync WebServer)\r\n", kLogTag,
             static_cast<int>(kWebTaskCore), static_cast<unsigned long>(kTaskStackBytes));
         xTaskCreatePinnedToCore(task_http_server, "HTTP_SRV", kTaskStackBytes, nullptr,
-            static_cast<UBaseType_t>(tskIDLE_PRIORITY + 2), nullptr, kWebTaskCore);
+            static_cast<UBaseType_t>(tskIDLE_PRIORITY + 1), nullptr, kWebTaskCore);
     }
 
 } // namespace gateway::http_server_task

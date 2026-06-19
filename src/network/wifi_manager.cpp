@@ -10,6 +10,10 @@
 #include <WiFi.h>
 #include <cstring>
 
+#include <esp_wifi.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+
 #include "config/config_store.h"
 #include "network/provision_fsm.h"
 #include "network/web_server.h"
@@ -20,6 +24,44 @@ namespace gateway::wifi_manager {
 }
 
 namespace {
+
+    // ---- WiFi 事件诊断日志 ---------------------------------------------------
+    uint32_t g_last_wifi_event_log_ms = 0;
+    constexpr uint32_t kWifiEventLogThrottleMs = 500;  // 同类型事件最多每 500ms 打一次
+
+    void wifi_event_diag(arduino_event_id_t event) {
+        const uint32_t now = millis();
+        if (now - g_last_wifi_event_log_ms < kWifiEventLogThrottleMs) {
+            return;
+        }
+        g_last_wifi_event_log_ms = now;
+
+        const char *name = "?";
+        switch (event) {
+        case ARDUINO_EVENT_WIFI_READY:                name = "WIFI_READY"; break;
+        case ARDUINO_EVENT_WIFI_SCAN_DONE:            name = "SCAN_DONE"; break;
+        case ARDUINO_EVENT_WIFI_STA_START:            name = "STA_START"; break;
+        case ARDUINO_EVENT_WIFI_STA_STOP:             name = "STA_STOP"; break;
+        case ARDUINO_EVENT_WIFI_STA_CONNECTED:        name = "STA_CONNECTED"; break;
+        case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:     name = "STA_DISCONNECTED"; break;
+        case ARDUINO_EVENT_WIFI_STA_AUTHMODE_CHANGE:  name = "STA_AUTH_CHANGE"; break;
+        case ARDUINO_EVENT_WIFI_STA_GOT_IP:           name = "STA_GOT_IP"; break;
+        case ARDUINO_EVENT_WIFI_STA_GOT_IP6:          name = "STA_GOT_IP6"; break;
+        case ARDUINO_EVENT_WIFI_STA_LOST_IP:          name = "STA_LOST_IP"; break;
+        case ARDUINO_EVENT_WIFI_AP_START:             name = "AP_START"; break;
+        case ARDUINO_EVENT_WIFI_AP_STOP:              name = "AP_STOP"; break;
+        case ARDUINO_EVENT_WIFI_AP_STACONNECTED:      name = "AP_STA_CON"; break;
+        case ARDUINO_EVENT_WIFI_AP_STADISCONNECTED:   name = "AP_STA_DISCON"; break;
+        default: break;
+        }
+        const uint32_t free_heap = ESP.getFreeHeap();
+        Serial.printf("[WIFI_EVT] evt=%s(%d) heap=%lu\r\n",
+            name, static_cast<int>(event), static_cast<unsigned long>(free_heap));
+    }
+
+    void wifi_event_handler(arduino_event_id_t event) { wifi_event_diag(event); }
+
+    // ---- 状态机 ---------------------------------------------------------------
 
     enum class StaFsm { Idle, Connecting, Connected };
 
@@ -221,6 +263,9 @@ namespace gateway::wifi_manager {
     void start() {
         gateway::state_machine::set_state(gateway::state_machine::SystemState::Boot);
         g_block_auto_saved_sta = false;
+
+        WiFi.onEvent(wifi_event_handler);  // 注册诊断事件回调
+
         WiFi.mode(WIFI_AP_STA);
         WiFi.disconnect(true, true);
         setup_ap();
@@ -229,6 +274,7 @@ namespace gateway::wifi_manager {
             g_sta = StaFsm::Idle;
             gateway::state_machine::set_state(gateway::state_machine::SystemState::WifiApMode);
         }
+
     }
 
     bool request_sta_connect(const char *ssid, const char *password) {
@@ -282,8 +328,12 @@ namespace gateway::wifi_manager {
             }
             if (st == WL_CONNECTED) {
                 g_sta = StaFsm::Connected;
-                Serial.printf("[WIFI_STA] STA IP=%s RSSI=%d AP still connected\r\n", WiFi.localIP().toString().c_str(),
-                    WiFi.RSSI());
+                wifi_ap_record_t ap_info{};
+                const int sta_chan = (esp_wifi_sta_get_ap_info(&ap_info) == ESP_OK)
+                    ? static_cast<int>(ap_info.primary) : -1;
+                Serial.printf("[WIFI_STA] STA IP=%s RSSI=%d ch=%d AP still connected\r\n",
+                    WiFi.localIP().toString().c_str(),
+                    WiFi.RSSI(), sta_chan);
                 gateway::state_machine::set_state(gateway::state_machine::SystemState::WifiStaConnected);
                 gateway::provision::notify_wifi_sta_linked();
             } else if (millis() - g_connect_start_ms > kConnectTimeoutMs) {

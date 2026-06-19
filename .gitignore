@@ -1,2 +1,9 @@
-.pio
+.pio/
 .vscode/
+
+# ESP-IDF / PlatformIO generated sdkconfig files. Commit sdkconfig.common/dev/prod instead.
+sdkconfig.gateway-*
+sdkconfig.old
+sdkconfig
+managed_components/
+dependencies.lock

@@ -223,7 +223,7 @@ namespace gateway::adc_pressure_can_task {
                     have_latest_data = true;
 
                     const auto msg = buildPgn1708Frame(latest_data);
-                    const bool queued = gateway::can_tx::enqueue(msg);
+                    const bool queued = gateway::can_tx::enqueue_high(msg);
                     if (!queued) {
                         ++can_enqueue_errors;
                     }

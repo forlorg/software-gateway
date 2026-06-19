@@ -90,6 +90,12 @@ namespace gateway::web_server {
             doc["dropped_lines"] = gateway::statistics::dropped();
             doc["serial_mirror_queue_drops"] = gateway::statistics::serial_mirror_queue_drops();
             doc["serial_mirror_queue_depth"] = gateway::can_rx::kSerialMirrorQueueDepth;
+            doc["can_tx_queue_drops"] = gateway::statistics::can_tx_queue_drops();
+            doc["can_tx_high_queue_drops"] = gateway::statistics::can_tx_high_queue_drops();
+            doc["can_tx_transmit_failures"] = gateway::statistics::can_tx_transmit_failures();
+            doc["mqtt_uplink_queue_drops"] = gateway::statistics::mqtt_uplink_queue_drops();
+            doc["mqtt_publish_queue_drops"] = gateway::statistics::mqtt_publish_queue_drops();
+            doc["mqtt_downlink_can_drops"] = gateway::statistics::mqtt_downlink_can_drops();
         }
 
         void refresh_live_json_snapshot() {
@@ -203,7 +209,7 @@ namespace gateway::web_server {
                 item["value"] = pto.valid ? pto.pto_pressure : "-";
             }
 
-            char stack[1536];
+            char stack[2048];
             send_json_doc(doc, stack, sizeof(stack));
         }
 
@@ -237,7 +243,7 @@ namespace gateway::web_server {
             write_can_traffic(can);
             auto cloud = doc["cloud"].to<JsonObject>();
             write_cloud_stats(cloud);
-            char stack[1536];
+            char stack[2048];
             send_json_doc(doc, stack, sizeof(stack));
         }
 

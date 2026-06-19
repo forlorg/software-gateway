@@ -29,6 +29,7 @@ namespace gateway::uart2_test_task {
 
         static constexpr const char kLogTag[]    = "SYS_LOAD";
         static constexpr TickType_t kPrintPeriod = pdMS_TO_TICKS(1000);
+        static constexpr TickType_t kTaskDumpPeriod = pdMS_TO_TICKS(60000); // 每 60s dump 所有任务栈水位
         static constexpr int kTimerDivider       = 80;    // 80 MHz / 80 = 1 MHz → 1 μs/tick
         static constexpr uint64_t kTimerAlarmUs  = 1000;  // 1 ms 周期 → 1000 Hz
 
@@ -114,6 +115,27 @@ namespace gateway::uart2_test_task {
                 static_cast<unsigned int>(largest_free_blk));
         }
 
+        /** 每 60s dump 关键任务栈高水位，用于定位栈溢出风险。 */
+        void dump_key_task_watermarks() {
+            // 项目中可能存在的关键任务名
+            static const char* kNames[] = {
+                "NET_TASK", "HTTP_SRV", "mqtt_agg", "OTA_TASK",
+                "sys_load_mon", "loopTask", "tiT",
+                "wifi", "esp_timer", "ipc0", "ipc1",
+                "IDLE0", "IDLE1"
+            };
+            Serial.printf("[%s] --- key task stack free ---\r\n", kLogTag);
+            for (const char* name : kNames) {
+                TaskHandle_t h = xTaskGetHandle(name);
+                if (h) {
+                    UBaseType_t wm = uxTaskGetStackHighWaterMark(h);
+                    Serial.printf("[%s]   %-16s stack_free=%lu\r\n",
+                        kLogTag, name, static_cast<unsigned long>(wm));
+                }
+            }
+            Serial.printf("[%s] --- end ---\r\n", kLogTag);
+        }
+
         void task_monitor(void *) {
             g_monitor_handle = xTaskGetCurrentTaskHandle();
 
@@ -130,7 +152,15 @@ namespace gateway::uart2_test_task {
             Serial.printf("[%s] ISR-based load monitor started, core=%d, rate=1000Hz\r\n",
                 kLogTag, static_cast<int>(xPortGetCoreID()));
 
+            TickType_t last_dump = xTaskGetTickCount();
+
             for (;;) {
+                const TickType_t now = xTaskGetTickCount();
+                if (now - last_dump >= kTaskDumpPeriod) {
+                    last_dump = now;
+                    dump_key_task_watermarks();
+                }
+
                 vTaskDelay(kPrintPeriod);
                 sample_and_print_load();
             }

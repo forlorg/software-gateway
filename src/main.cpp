@@ -10,7 +10,6 @@
 #include "system/gateway_context.h"
 #include "system/time_sync.h"
 #include "task/adc_pressure_can_task.h"
-#include "task/can_ring_flush_task.h"
 #include "task/http_server_task.h"
 #include "task/mqtt_uplink.h"
 #include "task/network_task.h"

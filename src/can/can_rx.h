@@ -14,11 +14,11 @@ namespace gateway::can_rx {
 
     constexpr int kMirrorTxTaskCore = 0;
     constexpr uint32_t kMirrorTxTaskStackBytes = 4096;
-    constexpr unsigned kMirrorTxTaskPriority = 3;
+    constexpr unsigned kMirrorTxTaskPriority = 3;  // USB 镜像是主业务链路之一，但写入任务必须有预算/超时边界。
 
     constexpr int kTaskCore = 1;
     constexpr uint32_t kTaskStackBytes = 6144;
-    constexpr unsigned kTaskPriority = 4;
+    constexpr unsigned kTaskPriority = 5;
 
 } // namespace gateway::can_rx
 

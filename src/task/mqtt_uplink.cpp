@@ -1,12 +1,12 @@
 /**
  * @file mqtt_uplink.cpp
- * @brief MQTT 上行聚合任务：从 RingBuffer 取 AT 行、按批调用 mqtt_manager 发布。
+ * @brief MQTT 上行聚合任务：从 RingBuffer 取 AT 行、按批交给 MQTT owner 发布。
  */
 
 #include "mqtt_uplink.h"
+#include "can/can_traffic_stats.h"
 #include "network/mqtt_manager.h"
 #include "protocol/at_protocol.h"
-#include "system/esp32_loop_core.h"
 #include "system/statistics.h"
 #include "utils/packet_ringbuffer.h"
 
@@ -15,7 +15,6 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 
-#include "can/can_traffic_stats.h"
 
 namespace gateway::mqtt_uplink {
 
@@ -49,14 +48,15 @@ namespace gateway::mqtt_uplink {
             }
         }
 
-        /** 将已拼好的批缓冲区发出；成功则记流量统计。 */
-        static void publish_batch(const uint8_t *batch, size_t pos) {
+        /** 将已拼好的批缓冲区交给 MQTT owner；不直接访问 PubSubClient。 */
+        static void enqueue_batch(const uint8_t *batch, size_t pos) {
             if (pos == 0) {
                 return;
             }
-            if (mqtt_manager::publish_vehicle_upload(batch, pos)) {
+            if (mqtt_manager::enqueue_vehicle_upload(batch, pos)) {
                 log_vehicle_upload_topic_once();
-                can_traffic_stats::record_uplink_bytes(static_cast<uint32_t>(pos));
+            } else {
+                statistics::add_mqtt_publish_queue_drops(1);
             }
         }
 
@@ -85,7 +85,7 @@ namespace gateway::mqtt_uplink {
                         break;
                     }
                     if (pos + n > sizeof(batch)) {
-                        publish_batch(batch, pos);
+                        enqueue_batch(batch, pos);
                         pos = 0;
                         if (n > sizeof(batch)) {
                             continue;
@@ -95,7 +95,7 @@ namespace gateway::mqtt_uplink {
                     pos += n;
                 }
                 if (pos > 0) {
-                    publish_batch(batch, pos);
+                    enqueue_batch(batch, pos);
                 }
                 can_traffic_stats::on_aggregate_tick();
             }
@@ -104,7 +104,8 @@ namespace gateway::mqtt_uplink {
 
     void begin() {
         ensure_ring();
-        xTaskCreatePinnedToCore(agg_task, "mqtt_agg", 8192, nullptr, 2, nullptr, kArduinoLoopPinnedCore);
+        // MQTT 聚合不是实时链路，放 Core0 低优先级，避免与 CAN/ADC 实时任务抢 Core1。
+        xTaskCreatePinnedToCore(agg_task, "mqtt_agg", 8192, nullptr, 1, nullptr, 0);
     }
 
     bool offer_at_binary(const uint8_t *line, uint16_t len) {
@@ -116,9 +117,11 @@ namespace gateway::mqtt_uplink {
             statistics::add_dropped(1);
             return false;
         }
-        bool ok = g_ring->push(line, len);
+        // CAN RX 是实时主链路；MQTT 上行不能等 mutex，拿不到锁或空间不足就丢。
+        // PacketRingBuffer 在空间不足时会丢旧保新。
+        bool ok = g_ring->push_nonblocking(line, len);
         if (!ok) {
-            statistics::add_dropped(1);
+            statistics::add_mqtt_uplink_queue_drops(1);
         }
         return ok;
     }

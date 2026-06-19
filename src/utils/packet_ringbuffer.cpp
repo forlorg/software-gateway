@@ -31,6 +31,14 @@ namespace gateway {
     }
 
     bool PacketRingBuffer::push(const uint8_t *data, uint16_t len) {
+        return push_with_timeout(data, len, pdMS_TO_TICKS(40));
+    }
+
+    bool PacketRingBuffer::push_nonblocking(const uint8_t *data, uint16_t len) {
+        return push_with_timeout(data, len, 0);
+    }
+
+    bool PacketRingBuffer::push_with_timeout(const uint8_t *data, uint16_t len, TickType_t wait_ticks) {
         if (!data || len == 0) {
             return false;
         }
@@ -38,7 +46,7 @@ namespace gateway {
         if (need > cap_) {
             return false;
         }
-        if (xSemaphoreTake(mu_, pdMS_TO_TICKS(40)) != pdTRUE) {
+        if (xSemaphoreTake(mu_, wait_ticks) != pdTRUE) {
             return false;
         }
 

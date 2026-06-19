@@ -1,6 +1,6 @@
 /**
  * @file can_tx.cpp
- * @brief CAN 发送侧：队列缓存 `twai_message_t`，独立任务调用 `twai_transmit` 出队发送。
+ * @brief CAN 发送侧：高/普通两级队列缓存 `twai_message_t`，独立任务优先发送高优先级帧。
  */
 
 #include "can_tx.h"
@@ -16,42 +16,109 @@
 namespace gateway::can_tx {
 
     namespace {
-        QueueHandle_t g_q;
-        constexpr int kDepth = 48;
+        QueueHandle_t g_q_high{};
+        QueueHandle_t g_q_normal{};
 
-        /** 发送任务：阻塞取队列并调用 TWAI 驱动发送。 */
+        constexpr int kHighDepth = 32;
+        constexpr int kNormalDepth = 48;
+        const TickType_t kHighEnqueueWait = pdMS_TO_TICKS(1);
+        const TickType_t kNormalEnqueueWait = pdMS_TO_TICKS(20);
+        const TickType_t kCloudEnqueueWait = 0;
+        const TickType_t kTransmitWait = pdMS_TO_TICKS(200);
+
+        bool send_one(const twai_message_t &m) {
+            const esp_err_t e = twai_transmit(&m, kTransmitWait);
+            if (e == ESP_OK) {
+                statistics::add_can_tx(1);
+                return true;
+            }
+
+            Serial.printf("[CAN TX] twai_transmit failed: %s extd=%u id=0x%08x dlc=%u\n",
+                esp_err_to_name(e), static_cast<unsigned>(m.extd),
+                static_cast<unsigned>(m.identifier & 0x1FFFFFFFu),
+                static_cast<unsigned>(m.data_length_code));
+            statistics::add_can_tx_transmit_failures(1);
+            return false;
+        }
+
+        bool receive_high(twai_message_t &m) {
+            return g_q_high && xQueueReceive(g_q_high, &m, 0) == pdTRUE;
+        }
+
+        bool receive_normal(twai_message_t &m) {
+            return g_q_normal && xQueueReceive(g_q_normal, &m, 0) == pdTRUE;
+        }
+
+        /** 发送任务：高优先级队列永远优先；普通队列只在高优先级暂空时发送。 */
         void task(void *arg) {
             (void)arg;
-            twai_message_t m;
+            twai_message_t m{};
             for (;;) {
-                if (xQueueReceive(g_q, &m, portMAX_DELAY) == pdTRUE) {
-                    esp_err_t e = twai_transmit(&m, pdMS_TO_TICKS(200));
-                    if (e == ESP_OK) {
-                        statistics::add_can_tx(1);
-                    } else {
-                        Serial.printf("[CAN TX] twai_transmit failed: %s extd=%u id=0x%08x dlc=%u\n",
-                            esp_err_to_name(e), static_cast<unsigned>(m.extd),
-                            static_cast<unsigned>(m.identifier & 0x1FFFFFFFu),
-                            static_cast<unsigned>(m.data_length_code));
-                    }
+                // 先无等待清高优先级积压。
+                if (receive_high(m)) {
+                    send_one(m);
+                    continue;
                 }
+
+                // 短等高优先级，保证 ADC 实时帧不被普通云端命令长时间压住。
+                if (g_q_high && xQueueReceive(g_q_high, &m, pdMS_TO_TICKS(1)) == pdTRUE) {
+                    send_one(m);
+                    continue;
+                }
+
+                // 高优先级暂空时才发普通队列。
+                if (receive_normal(m)) {
+                    send_one(m);
+                    continue;
+                }
+
+                vTaskDelay(pdMS_TO_TICKS(1));
             }
+        }
+
+        bool enqueue_to(QueueHandle_t q, const twai_message_t &msg, TickType_t wait_ticks) {
+            if (!q) {
+                return false;
+            }
+            return xQueueSend(q, &msg, wait_ticks) == pdTRUE;
         }
     } // namespace
 
     void init() {
-        if (g_q) {
+        if (g_q_high && g_q_normal) {
             return;
         }
-        g_q = xQueueCreate(kDepth, sizeof(twai_message_t));
-        xTaskCreatePinnedToCore(task, "can_tx", 4096, nullptr, 3, nullptr, 1);
+
+        g_q_high = xQueueCreate(kHighDepth, sizeof(twai_message_t));
+        g_q_normal = xQueueCreate(kNormalDepth, sizeof(twai_message_t));
+
+        xTaskCreatePinnedToCore(task, "can_tx", 4096, nullptr, 4, nullptr, 1);
     }
 
     bool enqueue(const twai_message_t &msg) {
-        if (!g_q) {
-            return false;
+        const bool ok = enqueue_to(g_q_normal, msg, kNormalEnqueueWait);
+        if (!ok) {
+            statistics::add_can_tx_queue_drops(1);
         }
-        return xQueueSend(g_q, &msg, pdMS_TO_TICKS(20)) == pdTRUE;
+        return ok;
+    }
+
+    bool enqueue_high(const twai_message_t &msg) {
+        const bool ok = enqueue_to(g_q_high, msg, kHighEnqueueWait);
+        if (!ok) {
+            statistics::add_can_tx_high_queue_drops(1);
+            statistics::add_can_tx_queue_drops(1);
+        }
+        return ok;
+    }
+
+    bool enqueue_cloud_command(const twai_message_t &msg) {
+        const bool ok = enqueue_to(g_q_normal, msg, kCloudEnqueueWait);
+        if (!ok) {
+            statistics::add_mqtt_downlink_can_drops(1);
+            statistics::add_can_tx_queue_drops(1);
+        }
+        return ok;
     }
 
     bool send_clutch_startup(const char *clutch, const char *value_str) {

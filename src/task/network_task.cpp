@@ -22,6 +22,7 @@ namespace gateway::network_task {
         static constexpr const char kLogTag[] = "NET_TASK";
         static constexpr BaseType_t kPinnedCore = static_cast<BaseType_t>(0);
         static constexpr uint32_t kNetworkLoopDelayMs = 40;
+        static constexpr uint32_t kDiagPeriodMs = 30000;    // 每 30s 输出任务诊断
 
         /**
          * 根据 Wi-Fi STA 和 MQTT 连接状态更新 GPIO2 网络状态灯。
@@ -59,11 +60,44 @@ namespace gateway::network_task {
 
             wifi_manager::start();
 
+            uint32_t last_diag_ms = 0;
+
             for (;;) {
+                const uint32_t t_loop_start = millis();
+
                 wifi_manager::loop();
                 gateway::time_sync::loop_poll();
                 gateway::mqtt_manager::loop_poll();
                 update_network_led_mode();
+
+                const uint32_t t_loop_elapsed = millis() - t_loop_start;
+
+                // 若单次循环超过 200ms 则告警
+                if (t_loop_elapsed > 200) {
+                    const UBaseType_t stack_free = uxTaskGetStackHighWaterMark(nullptr);
+                    Serial.printf(
+                        "[%s] SLOW_LOOP elapsed=%lums stack_free=%lu heap_free=%lu\r\n",
+                        kLogTag,
+                        static_cast<unsigned long>(t_loop_elapsed),
+                        static_cast<unsigned long>(stack_free),
+                        static_cast<unsigned long>(ESP.getFreeHeap()));
+                }
+
+                // 每 30s 输出网络任务诊断
+                if (millis() - last_diag_ms >= kDiagPeriodMs) {
+                    last_diag_ms = millis();
+                    const UBaseType_t stack_free = uxTaskGetStackHighWaterMark(nullptr);
+                    Serial.printf(
+                        "[%s] diag: wifi_sta=%d mqtt=%d time_sync=%d "
+                        "stack_free=%lu heap_free=%lu heap_min=%lu\r\n",
+                        kLogTag,
+                        static_cast<int>(wifi_manager::sta_is_linked()),
+                        static_cast<int>(mqtt_manager::is_connected()),
+                        static_cast<int>(gateway::time_sync::ntp_has_sync()),
+                        static_cast<unsigned long>(stack_free),
+                        static_cast<unsigned long>(ESP.getFreeHeap()),
+                        static_cast<unsigned long>(ESP.getMinFreeHeap()));
+                }
 
                 vTaskDelay(pdMS_TO_TICKS(kNetworkLoopDelayMs));
             }
@@ -82,7 +116,7 @@ namespace gateway::network_task {
             "NET_TASK",
             kTaskStackBytes,
             nullptr,
-            static_cast<UBaseType_t>(tskIDLE_PRIORITY + 1),
+            static_cast<UBaseType_t>(tskIDLE_PRIORITY + 2),
             nullptr,
             kPinnedCore);
     }

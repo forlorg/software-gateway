@@ -9,7 +9,7 @@
 
 namespace gateway::network_task {
 
-    constexpr uint32_t kTaskStackBytes = 9216;
+    constexpr uint32_t kTaskStackBytes = 12288;  // 12KB, 留足 WiFi/MQTT 调用深度余量
 
     void start();
 

@@ -10,7 +10,7 @@ namespace gateway::adc_pressure_can_task {
     constexpr int kGpio3InputPin = 3;
     constexpr int kPinnedCore = 1;
     constexpr uint32_t kTaskStackBytes = 6144;
-    constexpr uint32_t kTaskPriority = 2;
+    constexpr uint32_t kTaskPriority = 4;
 
     /**
      * @brief 检查 GPIO3 后按需启动 ADC 压力采样任务。

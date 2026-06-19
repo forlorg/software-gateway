@@ -21,6 +21,10 @@ namespace gateway {
         uint32_t dropped_packets() const { return dropped_; }
 
         bool push(const uint8_t *data, uint16_t len);
+        /** 非阻塞 push：若 mutex 正被占用则直接失败，避免实时 CAN RX 被 MQTT 上行缓冲拖住。 */
+        bool push_nonblocking(const uint8_t *data, uint16_t len);
+        /** 可指定等待 tick 的 push；空间不足时仍然丢旧保新。 */
+        bool push_with_timeout(const uint8_t *data, uint16_t len, TickType_t wait_ticks);
         uint16_t pop(uint8_t *dst, uint16_t dst_cap);
 
     private:

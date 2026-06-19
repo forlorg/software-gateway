@@ -29,17 +29,31 @@ namespace {
     QueueHandle_t g_mirror_q{};
 
     /**
-     * USB CDC 镜像发送任务：阻塞等待 CAN 接收任务投递的 AT 行，
-     * 分段写入 USB CDC/Serial，写失败时短暂让出 CPU 后继续发送。
+     * USB CDC 镜像发送任务：阻塞等待 CAN 接收任务投递的 AT 行。
+     *
+     * USB 镜像是主业务链路之一，因此任务优先级不能低；但 USB 主机不读时不能
+     * 无限占住当前 item。单条写入设超时，写不完就丢弃该镜像帧，避免反压 CAN RX/网络。
      */
     void mirror_tx_task(void *) {
+        constexpr uint32_t kItemWriteTimeoutMs = 20;
+        constexpr size_t kYieldEveryBytes = 512;
+
         MirrorLine item{};
         for (;;) {
             if (xQueueReceive(g_mirror_q, &item, portMAX_DELAY) != pdTRUE) {
                 continue;
             }
+
+            const uint32_t started_ms = millis();
             size_t off = 0;
+            size_t written_since_yield = 0;
+
             while (off < item.len) {
+                if (millis() - started_ms > kItemWriteTimeoutMs) {
+                    gateway::statistics::add_serial_mirror_queue_drops(1);
+                    break;
+                }
+
                 const size_t remain = item.len - off;
 #if ARDUINO_USB_MODE && ARDUINO_USB_CDC_ON_BOOT
                 const int w = Serial.write(item.bytes + off, remain);
@@ -47,11 +61,19 @@ namespace {
                 const int w = USBSerial.write(item.bytes + off, remain);
 #endif
                 if (w > 0) {
-                    off += static_cast<size_t>(w);
+                    const size_t wrote = static_cast<size_t>(w);
+                    off += wrote;
+                    written_since_yield += wrote;
+                    if (written_since_yield >= kYieldEveryBytes) {
+                        written_since_yield = 0;
+                        taskYIELD();
+                    }
                     continue;
                 }
                 vTaskDelay(1);
             }
+
+            taskYIELD();
         }
     }
 

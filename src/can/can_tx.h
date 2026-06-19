@@ -2,7 +2,7 @@
 
 /**
  * @file can_tx.h
- * @brief CAN 发送队列与任务初始化、入队接口。
+ * @brief CAN 发送队列与任务初始化、两级优先级入队接口。
  */
 
 #include <driver/twai.h>
@@ -10,7 +10,29 @@
 namespace gateway::can_tx {
 
     void init();
+
+    /**
+     * @brief 普通优先级 CAN 发送入队。
+     *
+     * 用于云端下发命令、HTTP/调试/标定命令等允许稍晚发送的帧。
+     * 队列满时最多短等 20ms。
+     */
     bool enqueue(const twai_message_t &msg);
+
+    /**
+     * @brief 高优先级 CAN 发送入队。
+     *
+     * 用于 ADC 实时采样产生的 PGN 0x1708 等实时帧。
+     * 队列满时最多短等 1ms，避免采样任务被 CAN TX 反压长时间拖住。
+     */
+    bool enqueue_high(const twai_message_t &msg);
+
+    /**
+     * @brief 云端下发 CAN 命令入队。
+     *
+     * 云端命令数据量很小、实时性不强；不阻塞 MQTT 回调。队列满则返回 false，调用方统计 drop。
+     */
+    bool enqueue_cloud_command(const twai_message_t &msg);
 
     /**
      * @brief 发送单个离合器起步点标定值。
