@@ -11,7 +11,6 @@
 #include <cstring>
 
 #include "can/can_parsed_data.h"
-#include "can/can_rx.h"
 #include "can/can_traffic_stats.h"
 #include "can/can_tx.h"
 #include "config/config_store.h"
@@ -26,6 +25,7 @@
 #include "system/version.h"
 #include "system/ota_manager.h"
 #include "task/mqtt_uplink.h"
+#include "transport/at_frame_dispatcher.h"
 
 namespace gateway::web_server {
 
@@ -89,13 +89,15 @@ namespace gateway::web_server {
             doc["mqtt_rx_msgs"] = gateway::statistics::mqtt_rx();
             doc["dropped_lines"] = gateway::statistics::dropped();
             doc["serial_mirror_queue_drops"] = gateway::statistics::serial_mirror_queue_drops();
-            doc["serial_mirror_queue_depth"] = gateway::can_rx::kSerialMirrorQueueDepth;
+            doc["serial_mirror_queue_depth"] = gateway::at_frame_dispatcher::kSerialMirrorQueueDepth;
             doc["can_tx_queue_drops"] = gateway::statistics::can_tx_queue_drops();
             doc["can_tx_high_queue_drops"] = gateway::statistics::can_tx_high_queue_drops();
             doc["can_tx_transmit_failures"] = gateway::statistics::can_tx_transmit_failures();
             doc["mqtt_uplink_queue_drops"] = gateway::statistics::mqtt_uplink_queue_drops();
             doc["mqtt_publish_queue_drops"] = gateway::statistics::mqtt_publish_queue_drops();
             doc["mqtt_downlink_can_drops"] = gateway::statistics::mqtt_downlink_can_drops();
+            doc["at_dispatch_frames"] = gateway::statistics::at_dispatch_frames();
+            doc["at_encode_failures"] = gateway::statistics::at_encode_failures();
         }
 
         void refresh_live_json_snapshot() {

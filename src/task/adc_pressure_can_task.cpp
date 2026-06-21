@@ -16,6 +16,7 @@
 #include "driver/gpio.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "transport/at_frame_dispatcher.h"
 
 namespace gateway::adc_pressure_can_task {
 
@@ -227,6 +228,9 @@ namespace gateway::adc_pressure_can_task {
                     if (!queued) {
                         ++can_enqueue_errors;
                     }
+
+                    // CAN、USB 与 MQTT 三条链路相互独立；统一分发器仅做非阻塞投递。
+                    gateway::at_frame_dispatcher::dispatch(msg);
                     ++can_frames;
                 }
 

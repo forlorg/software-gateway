@@ -17,7 +17,7 @@ Wi-Fi / MQTT Broker / Web Console / OTA Server
 主要目标：
 
 - 通过 ESP-IDF TWAI 驱动收发 CAN 2.0 扩展帧。
-- 将 CAN 数据解析、编码为 AT 行，并通过 USB CDC 镜像与 MQTT 上报。
+- 将 CAN 接收帧和 ADC 生成的 CAN 格式压力帧统一编码为 AT 行，并通过 USB CDC 镜像与 MQTT 上报。
 - 从 MQTT 下行 Topic 接收命令并转发到 CAN。
 - 通过 SoftAP + Web 页面完成 Wi-Fi / MQTT 配置。
 - 通过 NVS 保存配置，实现断电保持。
@@ -37,7 +37,7 @@ Wi-Fi / MQTT Broker / Web Console / OTA Server
 | MQTT 管理 | 已实现 | `PubSubClient + WiFiClient`，支持退避重连与上下行 Topic |
 | MQTT 上行聚合 | 已实现 | 48 KB RingBuffer，按周期批量 publish |
 | CAN RX/TX | 已实现 | 使用 ESP-IDF TWAI 驱动，TX/RX 各有独立任务 |
-| CAN → AT 编码 | 已实现 | AT 行经 USB CDC 镜像，并按条件进入 MQTT 上行 |
+| CAN/ADC → AT 编码 | 已实现 | 接收帧与 ADC 压力帧共用 AT 分发器，AT 行经 USB CDC 镜像并按条件进入 MQTT 上行 |
 | ADC 压力采样 | 已实现 | ADS7924 四通道采样、4 点块平均滤波、PGN 0x1708 打包发送 |
 | Web 标定 / 刷写指令 | 已实现 | 支持离合器标定命令与 CAN Flash 指令下发 |
 | 时间同步 | 已实现 | STA 联网后 SNTP，默认 `pool.ntp.org` |
@@ -144,6 +144,8 @@ software-gateway/
 │   │   ├── ota_task.cpp / .h
 │   │   ├── status_led_task.cpp / .h
 │   │   └── uart2_test_task.cpp / .h
+│   ├── transport/
+│   │   └── at_frame_dispatcher.cpp / .h
 │   ├── utils/
 │   │   └── packet_ringbuffer.cpp / .h
 │   └── main.cpp
@@ -167,12 +169,13 @@ software-gateway/
 5. 初始化 SNTP 时间模块 `gateway::time_sync::begin()`。
 6. 初始化 MQTT 管理器 `gateway::mqtt_manager::init()`。
 7. 启动 MQTT 上行聚合 `gateway::mqtt_uplink::begin()`。
-8. 启动网络任务 `gateway::network_task::start()`。
-9. 启动 HTTP 服务任务 `gateway::http_server_task::start()`。
-10. 启动状态灯任务 `gateway::status_led::start()`。
-11. 启动 CAN 驱动、CAN TX/RX 任务与 USB CDC 镜像任务 `gateway::can_driver::start()`。
-12. 启动 ADS7924 压力采样与压力 CAN 帧发送任务 `gateway::adc_pressure_can_task::start()`。
-13. 启动 OTA 任务 `gateway::ota_task::start()`。
+8. 初始化统一 AT 分发器及 USB CDC 镜像任务 `gateway::at_frame_dispatcher::begin()`。
+9. 启动网络任务 `gateway::network_task::start()`。
+10. 启动 HTTP 服务任务 `gateway::http_server_task::start()`。
+11. 启动状态灯任务 `gateway::status_led::start()`。
+12. 启动 CAN 驱动与 CAN TX/RX 任务 `gateway::can_driver::start()`。
+13. 启动 ADS7924 压力采样、CAN 发送及 AT 非阻塞分发任务 `gateway::adc_pressure_can_task::start()`。
+14. 启动 OTA 任务 `gateway::ota_task::start()`。
 
 `loop()` 当前仅每秒 `vTaskDelay()`，实际业务在 FreeRTOS 任务和 manager loop 中运行。
 
@@ -180,11 +183,11 @@ software-gateway/
 | --- | --- | --- |
 | `NET_TASK` | Core 0 | Wi-Fi、SNTP、MQTT 主轮询 |
 | `HTTP_SRV` | Core 0 | 同步 WebServer、配网 FSM、堆内存巡检 |
-| `mqtt_agg` | Arduino loop 所在核，通常 Core 1 | MQTT 上行聚合发布 |
-| `can_rx` | Core 1 | TWAI RX、AT 编码、USB CDC 镜像入队、MQTT offer |
+| `mqtt_agg` | Core 0 | MQTT 上行聚合发布 |
+| `can_rx` | Core 1 | TWAI RX、业务解析，并将接收帧交给统一 AT 分发器 |
 | `can_tx` | Core 1 | TWAI TX 队列发送 |
-| `usb_cdc_mirr` | Core 0 | USB CDC 镜像发送 |
-| `adc_pressure_can` | Core 1 | ADS7924 压力采样、滤波、PGN 0x1708 发送 |
+| `usb_cdc_mirr` | Core 0 | 发送 AT 分发器投递的 USB CDC 镜像 |
+| `adc_pressure_can` | Core 1 | ADS7924 压力采样、滤波、PGN 0x1708 CAN 入队及 AT 非阻塞分发 |
 | `OTA_TASK` | Core 0 | OTA manifest 检查、下载、校验与升级 |
 | `HB_LED` | Core 1 | GPIO1 心跳灯 |
 | 网络 LED 任务 | Core 0 | GPIO2 Wi-Fi/MQTT 状态灯 |
@@ -271,19 +274,18 @@ product 宣告帧参考扩展帧 ID：
 
 Payload 按 little-endian 解析为 32 位 product id，并转成 8 位小写十六进制字符串保存到 `gateway_context`。
 
-### 9.2 CAN → AT → MQTT
+### 9.2 CAN/ADC → AT → USB/MQTT
 
-典型路径：
+接收帧与 ADC 压力帧共用同一个 AT 编码和输出入口：
 
 ```text
-TWAI RX
-  -> can_rx
-  -> at_protocol 编码 AT 行
-  -> USBSerial 镜像队列
-  -> mqtt_uplink::offer_at_binary()
-  -> PacketRingBuffer
-  -> mqtt_agg 聚合
-  -> mqtt_manager publish
+TWAI RX -> can_rx ----------------------┐
+                                        ├-> at_frame_dispatcher
+ADS7924 -> PGN 0x1708 -> can_tx --------┘      ├-> USBSerial 镜像队列
+                                               └-> mqtt_uplink::offer_at_binary()
+                                                    -> PacketRingBuffer
+                                                    -> mqtt_agg 聚合
+                                                    -> mqtt_manager publish
 ```
 
 无 NTP 墙钟时，系统仍会进行 USB CDC 镜像；MQTT 上行需满足 `time_sync::can_use_wall_timestamp_for_upload()`。
@@ -311,8 +313,8 @@ ADS7924 Manual-Scan
   -> 4 点块平均滤波
   -> mV / CAN raw / kPa 换算
   -> PGN 0x1708 扩展帧
-  -> can_tx 队列
-  -> TWAI transmit
+  -> can_tx 高优先级队列 -> TWAI transmit
+  -> at_frame_dispatcher -> USB CDC 镜像 + MQTT 上行 RingBuffer
 ```
 
 关键参数：

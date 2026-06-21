@@ -16,6 +16,8 @@ namespace gateway::statistics {
         uint32_t g_mqtt_rx;
         uint32_t g_dropped;
         uint32_t g_serial_mirror_queue_drops;
+        uint32_t g_at_dispatch_frames;
+        uint32_t g_at_encode_failures;
 
         uint32_t g_can_tx_queue_drops;
         uint32_t g_can_tx_high_queue_drops;
@@ -31,6 +33,11 @@ namespace gateway::statistics {
     void add_mqtt_rx(uint32_t n) { g_mqtt_rx += n; }
     void add_dropped(uint32_t n) { g_dropped += n; }
     void add_serial_mirror_queue_drops(uint32_t n) { g_serial_mirror_queue_drops += n; }
+    void add_at_dispatch_frames(uint32_t n) { g_at_dispatch_frames += n; }
+    void add_at_encode_failures(uint32_t n) {
+        g_at_encode_failures += n;
+        add_dropped(n);
+    }
 
     void add_can_tx_queue_drops(uint32_t n) {
         g_can_tx_queue_drops += n;
@@ -58,6 +65,8 @@ namespace gateway::statistics {
     uint32_t mqtt_rx() { return g_mqtt_rx; }
     uint32_t dropped() { return g_dropped; }
     uint32_t serial_mirror_queue_drops() { return g_serial_mirror_queue_drops; }
+    uint32_t at_dispatch_frames() { return g_at_dispatch_frames; }
+    uint32_t at_encode_failures() { return g_at_encode_failures; }
 
     uint32_t can_tx_queue_drops() { return g_can_tx_queue_drops; }
     uint32_t can_tx_high_queue_drops() { return g_can_tx_high_queue_drops; }

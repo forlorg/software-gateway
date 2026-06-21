@@ -21,7 +21,6 @@ namespace gateway::can_driver {
         twai_driver_install(&g_config, &t_config, &f_config);
         twai_start();
         can_tx::init();
-        init_serial_mirror();
         can_rx_start_task();
     }
 

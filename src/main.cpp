@@ -16,6 +16,7 @@
 #include "task/ota_task.h"
 #include "task/status_led_task.h"
 #include "task/uart2_test_task.h"
+#include "transport/at_frame_dispatcher.h"
 
 /** UART0 调试日志：与 `variants/esp32s3/pins_arduino.h` 一致（RX=44, TX=43），经板载 USB-UART 桥。 */
 static constexpr int kLogUartRx = 44;
@@ -43,6 +44,7 @@ void setup() {
     gateway::time_sync::begin();
     gateway::mqtt_manager::init();
     gateway::mqtt_uplink::begin();
+    gateway::at_frame_dispatcher::begin();
     gateway::network_task::start();
 
     delay(350);
