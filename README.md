@@ -42,7 +42,7 @@ Wi-Fi / MQTT Broker / Web Console / OTA Server
 | Web 标定 / 刷写指令 | 已实现 | 支持离合器标定命令与 CAN Flash 指令下发 |
 | 时间同步 | 已实现 | STA 联网后 SNTP，默认 `pool.ntp.org` |
 | 状态灯 | 已实现 | GPIO1 心跳灯，GPIO2 网络/MQTT 状态灯 |
-| OTA | 已实现 | HTTP Manifest 检查、固件下载、MD5 与 SHA-256 校验、`Update` 写入 OTA 分区 |
+| OTA | 已实现 | 已具备 Manifest 检查、下载、MD5/SHA-256 校验和 OTA 分区写入，并已实现域名优先、单 IPv4 缓存与局域网兜底 |
 | WDT 统一监控 | 未实现 | 当前代码未看到统一任务级 Watchdog 管理 |
 | 完整 Health 面板 | 部分实现 | Web/API 已有堆内存、状态、流量等字段，仍可继续扩展 |
 
@@ -329,7 +329,9 @@ ADS7924 Manual-Scan
 
 ## 10. OTA 设计
 
-OTA 由 `src/system/ota_manager.*` 和 `src/task/ota_task.*` 实现，配置在 `src/config/ota_config.h` 与 `platformio.ini` 的 build flags 中。
+OTA 由 `src/system/ota_manager.*` 和 `src/task/ota_task.*` 实现，配置位于 `src/config/ota_config.h` 与 `platformio.ini`。当前代码已具备 manifest 检查、固件下载、MD5/SHA-256 校验、OTA 分区写入、Web 触发和失败退避。
+
+> 实施状态说明：当前源码已经实现“缓存域名 IP → 域名 DNS → 局域网备用”的候选链，并实现缓存签名校验、HTTP Host 保持、manifest 来源绑定及下载失败后下一端点重新 check。当前阶段仍使用 HTTP；HTTPS 50443 仅保留配置与客户端抽象，尚未启用。
 
 当前 `platformio.ini` 中的固件标识：
 
@@ -341,29 +343,173 @@ OTA 由 `src/system/ota_manager.*` 和 `src/task/ota_task.*` 实现，配置在 
 | Hardware | `1.1` |
 | Channel | `stable` |
 
-默认 OTA API 配置：
+### 10.1 已确认的 OTA 地址
 
-| 参数 | 默认值 |
+当前阶段使用 HTTP：
+
+| 类型 | 地址 |
 | --- | --- |
-| Scheme | `http` |
-| Host | `192.168.1.101` |
-| Port | `50080` |
-| Check path | `/api/v1/ota/check` |
-| Firmware file | `firmware.bin` |
-| 首次自动检查 | 开机 60 s 后 |
-| 周期检查 | 6 h |
-| 手动检查最小间隔 | 10 s |
-| OTA 任务栈 | 12288 bytes |
-| OTA 任务核心 | Core 0 |
+| 主域名 check | `http://do-update.top:50080/api/v1/ota/check` |
+| 局域网备用 check | `http://192.168.1.101:50080/api/v1/ota/check` |
 
-升级过程：
+未来启用 TLS 时使用：
 
-1. Wi-Fi 连接后进入 OTA 可检查状态。
-2. 拉取 manifest，并校验 project、hw、channel、version、build、size、md5、sha256、firmware path/url。
-3. 校验固件 URL 是否符合预期 OTA 地址。
-4. 下载固件并写入 OTA 分区。
-5. 使用 MD5 与 SHA-256 校验固件内容。
-6. `Update.end(true)` 完成后重启。
+```text
+https://do-update.top:50443/api/v1/ota/check
+```
+
+未来 HTTPS 端口为 `50443`，不是 `443`。当前阶段不启用 TLS。
+
+### 10.2 当前访问顺序
+
+没有缓存域名 IP：
+
+```text
+DNS 解析 do-update.top
+  -> 域名 check
+  -> 失败时访问 192.168.1.101
+```
+
+已有缓存域名 IP：
+
+```text
+缓存 IP check
+  -> 失败则删除缓存
+  -> 重新 DNS 解析 do-update.top
+  -> 仍失败则访问 192.168.1.101
+```
+
+固定优先级：
+
+```text
+有缓存：缓存 IP -> 域名 -> 局域网
+无缓存：域名 -> 局域网
+```
+
+所有候选均失败后才进入现有 Backoff。
+
+### 10.3 域名 IP 缓存
+
+- 域名只使用并缓存一个 IPv4。
+- 只有域名解析、连接和有效 check 全部成功后才保存 IP。
+- `update_available=false` 也属于有效 check 成功，可以保存 IP。
+- 只有 DNS 成功或 TCP 成功不能保存 IP。
+- 局域网备用服务器成功不得写入域名缓存。
+- 缓存 IP 的 check 或固件下载失败时立即删除缓存。
+- 当前不设置固定 TTL；缓存可用就继续使用，不可用就删除并重新解析。
+- factory reset 应同步清除该缓存。
+- 缓存应与 `do-update.top`、scheme 和端口绑定，配置变化时旧缓存失效。
+
+### 10.4 缓存 IP 的 HTTP Host
+
+缓存 IP 和本次 DNS 解析 IP 只是 TCP 传输地址，逻辑 OTA 源仍是：
+
+```text
+http://do-update.top:50080
+```
+
+通过裸 IP 连接时，HTTP Host 必须保持：
+
+```text
+do-update.top:50080
+```
+
+局域网备用连接的逻辑源和 Host 才是：
+
+```text
+192.168.1.101:50080
+```
+
+这一区分用于支持域名虚拟主机、反向代理和严格同源校验。
+
+### 10.5 check 成功标准
+
+一次 check 只有在以下条件满足时才算成功：
+
+1. TCP/HTTP 请求成功；
+2. HTTP 状态码为 `200`；
+3. 不发生、不跟随重定向；
+4. manifest 未超过大小限制；
+5. JSON 解析成功；
+6. `ok == true`；
+7. 无更新时直接成功；
+8. 有更新时，project、hw、channel、version、build、size、MD5、SHA-256 和固件 path/URL 全部校验通过。
+
+当前候选失败时继续下一候选，不立即进入全局 Backoff。
+
+### 10.6 固件下载与端点回退
+
+每个 manifest 必须绑定其来源端点：
+
+```text
+同一端点 check
+  -> 同一端点 manifest
+  -> 同一端点下载
+```
+
+固件下载失败时：
+
+1. 中止当前下载和 OTA 写入；
+2. 切换到下一候选；
+3. 在下一候选重新执行 check；
+4. 使用下一候选新返回的 manifest 下载。
+
+不得拿域名 manifest 直接去局域网下载，也不得拿局域网 manifest 直接去域名下载。
+
+典型回退：
+
+```text
+缓存 IP 下载失败
+  -> 删除缓存
+  -> 域名重新 check
+
+域名下载失败
+  -> 局域网重新 check
+
+局域网下载失败
+  -> Backoff
+```
+
+### 10.7 固件 URL 与重定向
+
+继续优先使用服务端返回的 `firmware_path`：
+
+```text
+/api/v1/ota/ps-pro-gateway/{version}/firmware.bin
+```
+
+- 域名和缓存 IP 候选的逻辑同源为 `http://do-update.top:50080`。
+- 局域网候选的逻辑同源为 `http://192.168.1.101:50080`。
+- 不允许跨域、跨端口或跨 scheme。
+- HTTP 301/302 等重定向继续拒绝，不跟随。
+
+### 10.8 保留的升级校验
+
+现有升级校验继续保留：
+
+1. manifest 响应大小限制；
+2. 固件 size 不超过 OTA app 分区；
+3. `Content-Length == manifest.size`；
+4. MD5；
+5. SHA-256；
+6. `Update.begin/write/end`；
+7. 下载空闲超时；
+8. 写入失败中止；
+9. 成功后重启；
+10. OTA 下载继续在独立低优先级任务中运行。
+
+### 10.9 未来 HTTPS
+
+切换到 `https://do-update.top:50443` 时，需要额外实现：
+
+- `WiFiClientSecure`；
+- Root CA；
+- 系统时间和证书有效期校验；
+- 禁止默认 `setInsecure()`；
+- 缓存 IP 直连时仍使用 `do-update.top` 作为 TLS SNI 和证书主机名；
+- HTTP Host 使用 `do-update.top:50443`。
+
+不能把 HTTPS URL 简单替换为裸 IP 后继续连接。
 
 ## 11. 构建与烧录
 
@@ -433,7 +579,9 @@ python -m platformio device monitor --port /dev/ttyUSB0 --baud 115200
 
 - 补充统一任务级 Watchdog 注册与健康检查。
 - 将 `/api/live_state` 扩展为更完整的 Health 面板。
+- 为 OTA 域名优先、单 IPv4 缓存和局域网兜底流程补充设备实机与故障注入测试。
 - 为 OTA 新固件启动后的 pending verify / 回滚确认补充显式逻辑。
+- 后续将 HTTP 主域名切换到 `https://do-update.top:50443`，并补充 CA、SNI 与证书主机名校验。
 - 为 `request-docs/*.yaml` 增加自动生成脚本，例如：
   - YAML → C++ 解析表。
   - YAML → Markdown 协议文档。

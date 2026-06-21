@@ -9,6 +9,14 @@
 
 namespace gateway::config_store {
 
+    struct OtaDomainCache {
+        uint32_t version = 0;
+        String scheme;
+        String host;
+        uint16_t port = 0;
+        String ipv4;
+    };
+
     bool begin();
     void factory_reset();
 
@@ -17,5 +25,9 @@ namespace gateway::config_store {
 
     bool mqtt_get(String &host, uint16_t &port, String &user, String &pass);
     bool mqtt_set(const String &host, uint16_t port, const String &user, const String &pass);
+
+    bool ota_domain_cache_get(OtaDomainCache &cache);
+    bool ota_domain_cache_set(const OtaDomainCache &cache);
+    void ota_domain_cache_clear();
 
 } // namespace gateway::config_store

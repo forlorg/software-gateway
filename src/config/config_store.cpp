@@ -1,6 +1,6 @@
 /**
  * @file config_store.cpp
- * @brief NVS（Preferences）读写：Wi-Fi 与 MQTT 凭据，缺键时避免无意义读与错误日志。
+ * @brief NVS（Preferences）读写：Wi-Fi、MQTT 凭据与 OTA 域名 IPv4 缓存。
  */
 
 #include "config_store.h"
@@ -11,7 +11,23 @@ namespace gateway::config_store {
 
     namespace {
         constexpr char kNs[] = "gw_cfg";
+
+        // Preferences 的 key 最长 15 字符，以下键均保持短名。
+        constexpr char kOtaCacheVersionKey[] = "ota_cv";
+        constexpr char kOtaSchemeKey[] = "ota_sch";
+        constexpr char kOtaHostKey[] = "ota_host";
+        constexpr char kOtaPortKey[] = "ota_port";
+        constexpr char kOtaIpv4Key[] = "ota_ip";
+
         Preferences prefs;
+
+        void remove_ota_domain_cache_keys() {
+            prefs.remove(kOtaCacheVersionKey);
+            prefs.remove(kOtaSchemeKey);
+            prefs.remove(kOtaHostKey);
+            prefs.remove(kOtaPortKey);
+            prefs.remove(kOtaIpv4Key);
+        }
     } // namespace
 
     bool begin() { return prefs.begin(kNs, false); }
@@ -58,6 +74,62 @@ namespace gateway::config_store {
         prefs.putString("mqtt_username", user);
         prefs.putString("mqtt_password", pass);
         return true;
+    }
+
+    bool ota_domain_cache_get(OtaDomainCache &cache) {
+        cache = OtaDomainCache{};
+
+        if (!prefs.isKey(kOtaCacheVersionKey) ||
+            !prefs.isKey(kOtaSchemeKey) ||
+            !prefs.isKey(kOtaHostKey) ||
+            !prefs.isKey(kOtaPortKey) ||
+            !prefs.isKey(kOtaIpv4Key)) {
+            // 清理断电或旧版本遗留的半写入记录；无缓存时 remove 是无害操作。
+            remove_ota_domain_cache_keys();
+            return false;
+        }
+
+        cache.version = prefs.getUInt(kOtaCacheVersionKey, 0);
+        cache.scheme = prefs.getString(kOtaSchemeKey, "");
+        cache.host = prefs.getString(kOtaHostKey, "");
+        cache.port = static_cast<uint16_t>(prefs.getUInt(kOtaPortKey, 0));
+        cache.ipv4 = prefs.getString(kOtaIpv4Key, "");
+
+        return cache.version != 0 &&
+               cache.scheme.length() > 0 &&
+               cache.host.length() > 0 &&
+               cache.port != 0 &&
+               cache.ipv4.length() > 0;
+    }
+
+    bool ota_domain_cache_set(const OtaDomainCache &cache) {
+        if (cache.version == 0 ||
+            cache.scheme.length() == 0 ||
+            cache.host.length() == 0 ||
+            cache.port == 0 ||
+            cache.ipv4.length() == 0) {
+            return false;
+        }
+
+        // 版本号是提交标记：先置 0，其他字段全部成功后最后写入真实版本号。
+        remove_ota_domain_cache_keys();
+        prefs.putUInt(kOtaCacheVersionKey, 0);
+
+        const bool scheme_ok = prefs.putString(kOtaSchemeKey, cache.scheme) > 0;
+        const bool host_ok = prefs.putString(kOtaHostKey, cache.host) > 0;
+        const bool port_ok = prefs.putUInt(kOtaPortKey, cache.port) > 0;
+        const bool ip_ok = prefs.putString(kOtaIpv4Key, cache.ipv4) > 0;
+        const bool version_ok = scheme_ok && host_ok && port_ok && ip_ok &&
+                                prefs.putUInt(kOtaCacheVersionKey, cache.version) > 0;
+
+        if (!version_ok) {
+            remove_ota_domain_cache_keys();
+        }
+        return version_ok;
+    }
+
+    void ota_domain_cache_clear() {
+        remove_ota_domain_cache_keys();
     }
 
 } // namespace gateway::config_store
