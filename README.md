@@ -127,6 +127,12 @@ software-gateway/
 │   │   └── wifi_manager.cpp / .h
 │   ├── protocol/
 │   │   └── at_protocol.cpp / .h
+│   ├── ota/
+│   │   ├── ota_types.h
+│   │   ├── ota_endpoint_planner.cpp / .h
+│   │   ├── ota_http_route.cpp / .h
+│   │   ├── ota_manifest_client.cpp / .h
+│   │   └── ota_firmware_installer.cpp / .h
 │   ├── system/
 │   │   ├── esp32_loop_core.h
 │   │   ├── gateway_context.cpp / .h
@@ -331,7 +337,18 @@ ADS7924 Manual-Scan
 
 ## 10. OTA 设计
 
-OTA 由 `src/system/ota_manager.*` 和 `src/task/ota_task.*` 实现，配置位于 `src/config/ota_config.h` 与 `platformio.ini`。当前代码已具备 manifest 检查、固件下载、MD5/SHA-256 校验、OTA 分区写入、Web 触发和失败退避。
+OTA 由 `src/system/ota_manager.*` 负责编排，独立能力位于 `src/ota/`，任务入口为 `src/task/ota_task.*`，配置位于 `src/config/ota_config.h` 与 `platformio.ini`。`ota_manager.cpp` 只保留状态机、请求仲裁、失败退避和候选流程编排；端点规划、HTTP 路由、Manifest 获取/校验、固件下载与写入分别由独立模块承担。当前代码已具备 manifest 检查、固件下载、MD5/SHA-256 校验、OTA 分区写入、Web 触发和失败退避。
+
+模块职责：
+
+| 模块 | 职责 |
+| --- | --- |
+| `ota_types.h` | OTA 内部领域类型，不暴露到 Web/API |
+| `ota_endpoint_planner.*` | 缓存 IP、DNS、LAN 候选构造与端点准备 |
+| `ota_http_route.*` | 保持逻辑 Host/SNI，同时将 TCP 路由到指定 IP |
+| `ota_manifest_client.*` | check 请求、JSON 解析、Manifest 和固件 URL 校验 |
+| `ota_firmware_installer.*` | 下载、MD5/SHA-256 校验、Flash 写入和重启 |
+| `ota_manager.*` | 状态机、请求调度、退避和上述模块的流程编排 |
 
 > 实施状态说明：当前源码已经实现“缓存域名 IP → 域名 DNS → 局域网备用”的候选链，并实现缓存签名校验、HTTP Host 保持、manifest 来源绑定及下载失败后下一端点重新 check。当前阶段仍使用 HTTP；HTTPS 50443 仅保留配置与客户端抽象，尚未启用。
 

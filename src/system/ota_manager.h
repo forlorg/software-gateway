@@ -1,5 +1,6 @@
 #pragma once
 
+#include <stddef.h>
 #include <stdint.h>
 
 namespace gateway::ota {
@@ -19,6 +20,9 @@ namespace gateway::ota {
         Failed
     };
 
+    static constexpr size_t kStatusVersionCapacity = 33;
+    static constexpr size_t kStatusErrorCapacity = 96;
+
     struct Status {
         State state;
         bool update_available;
@@ -26,9 +30,9 @@ namespace gateway::ota {
         uint8_t progress;
         uint32_t current_build;
         uint32_t latest_build;
-        const char* current_version;
-        const char* latest_version;
-        const char* last_error;
+        char current_version[kStatusVersionCapacity];
+        char latest_version[kStatusVersionCapacity];
+        char last_error[kStatusErrorCapacity];
     };
 
     void begin();

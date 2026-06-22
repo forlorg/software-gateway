@@ -1,0 +1,470 @@
+# 13_at_packet_format.yaml
+# 说明：
+# - 本文件描述拖拉机标定系统使用的 AT 数据包（AT Packet）线格式。
+# - AT 数据包是上位机（PC）与开发板（MCU/ESP32）之间串口通信的统一帧格式，
+#   也是串口数据经由 MQTT 上传至云端时的封装格式。
+# - 本文件不保存版本更新记录；版本变更由 git 管理。
+
+document:
+  name: 13_at_packet_format
+  language: zh-CN
+  purpose: >
+    定义 AT 数据包的线格式（wire format），包括帧结构、时间戳编码语义、
+    帧 ID 通道掩码规则、同步/解析算法，以及串口直连与 MQTT 云传两种场景下
+    时间戳打包策略的区别。大模型在生成串口通信、MQTT 封装、日志解析等代码时，
+    应优先参考本文件的字段布局与语义说明。
+  scope:
+    include:
+      - AT 数据包完整字节布局
+      - 4 字节时间戳的高 5 位（时区/类型）与低 27 位（毫秒计数）语义
+      - 开发板上电时间（uptime）与墙钟时间（wall clock）两种时间戳模式
+      - 4 字节帧 ID 的 CAN ID 左移 + 通道掩码编码
+      - 帧尾 \r\n 与同步恢复算法
+      - 编码路径（PC→串口、PC→MQTT）的时间戳打包策略
+      - 解码路径（串口→PC、MQTT→PC）的时间戳还原策略
+      - 上位机首次同步与开发板复位检测逻辑
+
+# ============================================================================
+# 一、AT 数据包线格式（Wire Format）
+# ============================================================================
+at_packet_structure:
+  overview: >
+    每个 AT 数据包由固定头部 "AT" 开始，以 "\r\n"（CRLF，0x0D 0x0A）结束。
+    中间包含 4 字节时间戳、4 字节帧 ID、1 字节负载长度、以及可变长度的负载数据。
+    所有多字节整数字段均使用大端序（big-endian / network byte order）。
+  byte_layout:
+    - field: header
+      offset: 0
+      length: 2
+      type: ASCII
+      value: "AT"
+      description: >
+        同步字（sync word / magic bytes）。接收端通过搜索 "AT" 定位帧边界。
+        若在非帧头位置出现 "AT" 字样，由同步算法通过长度校验和帧尾校验来排除误同步。
+
+    - field: timestamp
+      offset: 2
+      length: 4
+      type: uint32 (big-endian)
+      description: >
+        4 字节时间戳，语义由高 5 位（bit[31:27]）决定，详见下文"时间戳编码"章节。
+        字节序：MSB 在前（offset+0 为 bit[31:24]，offset+3 为 bit[7:0]）。
+
+    - field: frame_id
+      offset: 6
+      length: 4
+      type: uint32 (big-endian)
+      description: >
+        4 字节帧 ID，编码了原始 29-bit CAN 扩展 ID 和通道掩码，详见下文"帧 ID 编码"章节。
+
+    - field: payload_length
+      offset: 10
+      length: 1
+      type: uint8
+      range: "0 ~ 255"
+      description: >
+        负载（payload）的字节数。该字段之后紧跟 payload 数据。
+
+    - field: payload
+      offset: 11
+      length: "payload_length (0 ~ 255)"
+      type: bytes
+      description: >
+        CAN 帧的数据体，即 8 字节以内的 CAN Data（DLC 0~8，标准要求 ≤8，但协议字段允许 0~255）。
+        实际使用时仅承载 CAN 帧的 data0~data7（最多 8 字节）。
+
+    - field: tail
+      offset: "11 + payload_length"
+      length: 2
+      type: ASCII
+      value: "\r\n"
+      description: >
+        固定帧尾（CRLF，字节值 0x0D 0x0A）。接收端解包时验证此字段以确认帧完整性。
+        注意：payload 内部可能巧合出现 0x0D 0x0A 字节序列，因此验证的是"整包末尾"的两个字节，
+        而非 payload 内部。
+
+  total_length_formula: "13 + payload_length"
+  fixed_header_length: 11  # AT(2) + ts(4) + id(4) + len(1)
+  fixed_tail_length: 2     # \r\n(2)
+
+  # --------------------------------------------------------------------------
+  # 二、时间戳编码（4 Bytes Timestamp）
+  # --------------------------------------------------------------------------
+  timestamp_encoding:
+    field_width: 32
+    byte_order: big_endian
+    bit_layout:
+      high_5:
+        bits: "bit[31:27]"
+        name: timezone_type_bits
+        description: >
+          高 5 位（tzBits）同时承担时区编码和类型标记两个角色。
+        values:
+          - value: "0x1F (decimal 31, binary 11111)"
+            name: kTzBitsDevBoardUptime
+            meaning: >
+              开发板上电时间模式（Serial Uptime）。
+              当高 5 位全部为 1 时，表示低 27 位存储的是设备从开机起计的毫秒数，
+              而不是墙钟（wall clock）时间。此模式仅用于串口直连通信。
+            source: PC→串口（编码）和串口→PC（解码）均使用此模式。
+          - value: "0x00 ~ 0x1E (decimal 0~30)"
+            name: WallClockWithTimezone
+            meaning: >
+              墙钟时间模式（Wall Clock）。高 5 位编码时区偏移量：
+              tzBits = offset_hours + 12，其中 offset_hours 为本地时区相对 UTC 的小时偏移。
+              offset_hours 取值区间为 [-12, 19]，故 tzBits 取值区间为 [0, 31]。
+              但在墙钟模式下 tzBits 实际取值为 0~30（31 被保留给上电时间模式）。
+              例如：UTC+8 → offset_hours=8 → tzBits=20（0x14）。
+            source: 用于 MQTT 云端通信，由 packMqttWallTimestamp() 生成。或用于 ESP32 网关，网关会自行联网获取时区并使用墙钟模式。
+
+      low_27:
+        bits: "bit[26:0]"
+        name: milliseconds_field
+        mask: "0x07FFFFFF"
+        max_value: 134217727 (约 37.28 小时)
+        description_by_mode:
+          uptime_mode:
+            condition: "high_5 == 0x1F"
+            meaning: >
+              设备自开机以来的毫秒计数（milliseconds since device boot）。
+              由设备（开发板/MCU）维护，上位机接收后通过首次同步点将其转换为墙钟时间。
+              注意：27 位最大可表示约 37 小时的上电时间，超过后会回绕（wrap around）。
+            wrap_around_handling: >
+              代码使用 uptimeDeltaMs27() 函数处理 27 位回绕：
+              若差值超过 2^26（约 18.6 小时），则认为是回绕并进行补偿。
+              例如：cur=100, base=134217600 → delta = 100 - 134217600 = -134217500，
+              因 delta < -(2^26)，加上 2^27 后得到正确的正增量。
+          wall_clock_mode:
+            condition: "high_5 != 0x1F"
+            meaning: >
+              当天自 00:00:00 起计的本地时间毫秒数（milliseconds since midnight, local time）。
+              取值范围 0 ~ 86399999（24 小时 = 86400000 ms，上限为 0x07FFFFFF 截断）。
+              结合高 5 位的时区偏移，可还原为完整的 UTC 时刻。
+
+    # ------------------------------------------------------------------------
+    # 三、帧 ID 编码（4 Bytes Frame ID）
+    # ------------------------------------------------------------------------
+  frame_id_encoding:
+    field_width: 32
+    byte_order: big_endian
+    description: >
+      4 字节帧 ID（wiredId）编码了原始 29-bit CAN 扩展帧 ID（baseId）和通道掩码。
+      编码方式：先将原始 CAN ID 左移 3 位，然后将低 3 位替换为通道掩码。
+    formula: "wiredId = (baseId << 3) | channel_mask"
+    channel_mask:
+      description: >
+        低 3 位（bit[2:0]）为通道掩码，标记 CAN 帧来源于哪个 CAN 总线通道。
+      values:
+        - value: "0x04"
+          meaning: "CAN0 通道（默认）。所有非 0x05 的掩码均视为 CH0。"
+        - value: "0x05"
+          meaning: "CAN1 通道。"
+    decode:
+      steps:
+        - "从 wiredId 低 3 位提取 mask：channel_no = (mask == 0x05) ? 1 : 0"
+        - "还原原始 CAN ID：baseId = wiredId >> 3"
+        - "从 baseId 提取 4 字节 frame_id：MSB 在前存入 QByteArray(4)"
+    example:
+      input_base_id: "0x06151E03"
+      channel: "CH1"
+      mask: "0x05"
+      wired_id_calculation: "(0x06151E03 << 3) | 0x05 = 0x30A8F01D"
+      wire_bytes: ["0x30", "0xA8", "0xF0", "0x1D"]
+
+    # ------------------------------------------------------------------------
+    # 四、同步与解析算法
+    # ------------------------------------------------------------------------
+  synchronization_algorithm:
+    function: takeOneAtPacketByLength
+    description: >
+      从字节流缓冲区中提取一个完整的 AT 数据包。算法是自同步的：
+      通过搜索 "AT" 同步字定位帧头，然后利用 LEN 字段计算预期帧长，
+      最后验证帧尾 \r\n 确认完整性。若验证失败则逐字节滑动重新同步。
+    steps:
+      - step: 1
+        name: 检查最小长度
+        detail: "若 buffer 长度 < 2，返回 false（等待更多数据）。"
+      - step: 2
+        name: 搜索同步字 "AT"
+        detail: >
+          在 buffer 中查找子串 "AT"。未找到时，若 buffer 末尾为 'A'，
+          保留最后一个字节（防止跨包边界的 "A"+"T" 被截断），否则清空 buffer。
+          找到后，丢弃 "AT" 之前的所有字节。
+      - step: 3
+        name: 读取 LEN 字段
+        detail: >
+          等待 buffer 长度 ≥ 11（AT + TS + ID + LEN）。读取 offset=10 处的 1 字节作为 payloadLen。
+          计算预期总包长：totalLen = 11 + payloadLen + 2。
+      - step: 4
+        name: 等待数据到齐
+        detail: "若 buffer 长度 < totalLen，返回 false（等待更多数据）。"
+      - step: 5
+        name: 验证帧尾
+        detail: >
+          检查 buffer[totalLen-2] == '\r' 且 buffer[totalLen-1] == '\n'。
+          若不匹配，说明发生错位/误同步，丢弃 buffer 的第 1 字节，返回 true 让外层循环重试。
+      - step: 6
+        name: 取出完整包
+        detail: >
+          outPacket = buffer.left(totalLen)；buffer.remove(0, totalLen)。
+          返回 true 表示成功提取一个完整帧。
+    robustness_notes:
+      - "同步字 'AT' 可能在 payload 内部巧合出现，但依赖 LEN 定位 + 帧尾验证的组合来排除误判。"
+      - "payload 内部允许出现 \\r\\n，不影响帧尾验证（只校验整包末尾的两个字节）。"
+      - "跨包边界的 'A' + 'T' 不会被误丢弃（保留末尾 'A' 的逻辑）。"
+
+    # ------------------------------------------------------------------------
+    # 五、解码路径：AT 包 → can_frame_raw_t
+    # ------------------------------------------------------------------------
+  decoding:
+    function: decodeCanFrame
+    description: >
+      将已验证帧尾的 AT 数据包解析为 can_frame_raw_t 结构体。
+      重点在于时间戳的两种模式还原和帧 ID 的去掩码。
+    steps:
+      - step: 1
+        name: 验证最小长度
+        detail: "数据长度必须 ≥ 13（AT + TS + ID + LEN + \\r\\n）。"
+      - step: 2
+        name: 验证头部
+        detail: "前 2 字节必须为 'A' 'T'。"
+      - step: 3
+        name: 解析时间戳
+        detail: |
+          读取 4 字节大端 uint32 为 ts。
+          tzBits = (ts >> 27) & 0x1F（高 5 位）
+          low27  = ts & 0x07FFFFFF（低 27 位）
+          根据 tzBits 分两种模式处理（详见下文"时间戳同步策略"）。
+      - step: 4
+        name: 解析帧 ID
+        detail: |
+          读取 4 字节大端 uint32 为 wiredId。
+          mask = wiredId & 0x07
+          channel_no = (mask == 0x05) ? 1 : 0
+          baseId = wiredId >> 3
+          将 baseId 按大端序拆为 4 字节 QByteArray 存入 frame.frame_id。
+      - step: 5
+        name: 读取负载长度
+        detail: "读取 1 字节 payloadLen（0~255）。"
+      - step: 6
+        name: 提取负载
+        detail: "frame.frame_data = data.mid(idx, payloadLen)。"
+      - step: 7
+        name: 验证帧尾
+        detail: "末尾 2 字节必须为 \\r\\n。"
+      - step: 8
+        name: 记录最近墙钟
+        detail: "m_lastDecodedWallTime = wallForMqttPack（供后续 MQTT 上行打包使用）。"
+
+    # ------------------------------------------------------------------------
+    # 六、时间戳同步策略（解码侧）
+    # ------------------------------------------------------------------------
+  timestamp_sync_strategy:
+    description: >
+      解码时根据 tzBits 的值分为两种处理路径：上电时间同步路径和墙钟直接还原路径。
+    路径：
+    case_uptime:
+      condition: "tzBits == 0x1F (kTzBitsDevBoardUptime)"
+      name: 开发板上电时间→墙钟对齐
+      description: >
+        设备发送的是上电毫秒数（非墙钟）。上位机在收到首帧时记录同步锚点，
+        后续帧通过与锚点的差值计算墙钟时间。
+      logic:
+        first_frame:
+          action: >
+            m_devUptimeAtSync = low27（记录设备开机毫秒数）
+            m_wallClockAtSync = QDateTime::currentDateTime()（记录当前 PC 墙钟）
+            m_devUptimeSynced = true
+        subsequent_frames:
+          action: >
+            delta = uptimeDeltaMs27(low27, m_devUptimeAtSync)（带 27 位回绕处理的差值）
+            event_time = m_wallClockAtSync + delta（毫秒）
+            frame.time_stamp = event_time.time()（取时间部分）
+          re_sync_condition: >
+            若 delta < -3600000（即设备时间倒退超过 1 小时），判定开发板已复位，
+            重新执行首次同步逻辑（更新 m_devUptimeAtSync 和 m_wallClockAtSync）。
+        wrap_around:
+          function: uptimeDeltaMs27(cur, base)
+          logic: |
+            d = cur - base（qint64 有符号差）
+            wrap = 1 << 27
+            if d > (wrap >> 1): d -= wrap    # 正向回绕 → 负补偿
+            else if d < -(wrap >> 1): d += wrap  # 负向回绕 → 正补偿
+            return d
+          note: "2^27 = 134217728 ms ≈ 37.28 小时，回绕阈值设为 2^26 ≈ 18.6 小时。"
+
+    case_wall_clock:
+      condition: "tzBits != 0x1F"
+      name: 墙钟直接还原
+      description: >
+        低 27 位直接作为当天自午夜起的毫秒数，结合当天日期构造本地时间。
+      logic: |
+        msLocal = low27（截断至 0x07FFFFFF）
+        msClamped = clamp(msLocal, 0, 86399999)  # 限制在 24 小时内
+        frame.time_stamp = QTime::fromMSecsSinceStartOfDay(msClamped)
+        wallForMqttPack = QDateTime(当天日期, frame.time_stamp, Qt::LocalTime)
+
+    # ------------------------------------------------------------------------
+    # 七、编码路径：can_frame_raw_t → AT 包
+    # ------------------------------------------------------------------------
+  encoding:
+    function: encodeCanFrame
+    description: >
+      将 can_frame_raw_t 结构体编码为 AT 数据包字节流。
+      有两种时间戳打包模式，由 AtTimestampPack 枚举控制。
+    modes:
+      serial_uptime:
+        enum: AtTimestampPack::SerialUptime
+        usage: "PC → 开发板串口（writeSerialAtWire）"
+        timestamp_logic: |
+          elapsed = m_serialUptimeTimer.elapsed()（PC 自串口打开起计时的毫秒数）
+          low27 = elapsed & 0x07FFFFFF
+          tsPacked = (0x1F << 27) | low27
+        note: >
+          高 5 位固定为 0x1F，与设备端的上电时间模式一致。
+          上位机不使用自身系统时间，而是用"自串口打开以来的经过时间"来模拟开发板的上电时间格式。
+
+      mqtt_wall:
+        enum: AtTimestampPack::MqttWall
+        usage: "PC → MQTT 云端上传（uploadCanFrame / sendCanFrame with map）"
+        timestamp_logic: |
+          调用 packMqttWallTimestamp(localEventTime)：
+            ms = 当天 00:00:00 到 localEventTime 的毫秒数
+            low27 = clamp(ms, 0, 0x07FFFFFF)
+            offsetHours = 系统本地时区相对 UTC 的小时偏移（四舍五入，clamp[-12, 19]）
+            high5 = (offsetHours + 12) << 27
+            tsPacked = high5 | low27
+
+    frame_id_encoding:
+      description: |
+        baseId 由 4 字节 frame.frame_id 按大端序拼接为 uint32。
+        mask = (channel_no == 1) ? 0x05 : 0x04
+        wiredId = (baseId << 3) | mask
+        再按大端序拆为 4 字节写入。
+
+    length_encoding: "1 字节：frame.frame_data.size() & 0xFF"
+
+    assembly_order:
+      - "msg.append(\"AT\")"
+      - "msg.append(tsPacked 的 4 字节大端表示)"
+      - "msg.append(wiredId 的 4 字节大端表示)"
+      - "msg.append(payload 长度的 1 字节)"
+      - "msg.append(frame.frame_data)"
+      - "msg.append(\"\\r\\n\")"
+
+# ============================================================================
+# 八、辅助函数
+# ============================================================================
+helper_functions:
+  packMqttWallTimestamp:
+    signature: "static quint32 packMqttWallTimestamp(const QDateTime &localEventTime)"
+    description: >
+      将本地墙钟时间打包为 MQTT 墙钟模式的 4 字节时间戳。
+    steps:
+      - "确保 localEventTime 的 timeSpec 为 Qt::LocalTime。"
+      - "计算当天 00:00:00 到该时刻的毫秒差，截断至 27 位（0x07FFFFFF）。"
+      - "获取系统时区相对 UTC 的小时偏移 offsetHours = round(offsetSeconds / 3600)，clamp 到 [-12, 19]。"
+      - "高 5 位 = (offsetHours + 12) & 0x1F。"
+      - "返回 (high5 << 27) | low27。"
+
+  parseTimestampToQTime:
+    signature: "static QTime parseTimestampToQTime(quint32 timestamp)"
+    description: >
+      静态工具函数：将 MQTT 墙钟模式时间戳还原为 QTime（仅时间部分）。
+      不依赖实例状态（与 decodeCanFrame 中的上电同步不同）。
+    steps:
+      - "low27 = timestamp & 0x07FFFFFF → msSinceMidnight。"
+      - "tzOffsetHours = ((timestamp >> 27) & 0x1F) - 12。"
+      - "构造 UTC 当天日期 + msSinceMidnight 的 QDateTime。"
+      - "加时区偏移得到本地时间，返回 .time()。"
+
+  generateTimestamp:
+    signature: "static quint32 generateTimestamp(const QTime &time)"
+    description: >
+      便捷函数：以当前日期 + 给定时间构造 QDateTime，调用 packMqttWallTimestamp 生成时间戳。
+      time 默认为 QTime::currentTime()。
+
+# ============================================================================
+# 九、数据流路径汇总
+# ============================================================================
+data_flow_summary:
+  serial_direct:
+    direction: "PC ↔ 开发板（串口直连）"
+    pc_to_device:
+      path: "sendCanFrame → encodeCanFrame(SerialUptime) → writeSerialAtWire → 串口 TX"
+      timestamp: "高 5 位 = 0x1F，低 27 位 = PC 自串口打开起计时 ms"
+    device_to_pc:
+      path: "串口 RX → readyRead → recvDeviceData(fromMqtt=false) → takeOneAtPacketByLength → decodeCanFrame"
+      timestamp: "高 5 位 = 0x1F，低 27 位 = 设备自开机起计时 ms"
+      sync: "首次接收时建立 m_devUptimeAtSync ↔ m_wallClockAtSync 锚点"
+
+  mqtt_cloud:
+    direction: "PC ↔ 云端 MQTT Broker"
+    upload:
+      path: "串口收到帧 → uploadCanFrame → encodeCanFrame(MqttWall) → MQTT publish"
+      topic: "topic_ps_pro/vehicle_upload/{uid_hash}"
+      timestamp: "高 5 位 = 时区偏移+12，低 27 位 = 当天自午夜 ms"
+      note: "uploadCanFrame 内部使用 decodeCanFrame 最后记录的 m_lastDecodedWallTime 作为墙钟输入。"
+    download:
+      path: "MQTT subscribe → onMqttMessage → recvDeviceData(fromMqtt=true) → MqttPlaybackController → CanFrameBufferProcessor"
+      topic: "topic_ps_pro/vehicle_download/{uid_hash}"
+      timestamp: "应保持上传时的墙钟模式，直接还原为 QTime"
+      note: "fromMqtt=true 的帧会进入回放控制器（MqttPlaybackController），按时间戳调度后写入缓冲区。"
+
+  map_office:
+    direction: "远程地图端 → MQTT 下发"
+    path: "sendCanFrame(map) → encodeCanFrame(MqttWall, 当前墙钟) → MQTT publish"
+    timestamp: "使用当前 PC 墙钟时间（QDateTime::currentDateTime()）"
+
+# ============================================================================
+# 十、代码引用
+# ============================================================================
+code_references:
+  primary_file: "src/lib_com/assistant_com.cpp"
+  header_file: "src/lib_com/assistant_com.h"
+  key_functions:
+    - name: takeOneAtPacketByLength
+      role: "从缓冲区提取一个完整 AT 包（同步 + 长度验证 + 帧尾验证）"
+    - name: decodeCanFrame
+      role: "AT 包 → can_frame_raw_t 解码"
+    - name: encodeCanFrame
+      role: "can_frame_raw_t → AT 包编码"
+    - name: recvDeviceData
+      role: "接收数据入口，循环调用以上两个函数"
+    - name: packMqttWallTimestamp
+      role: "墙钟时间 → 4 字节时间戳打包"
+    - name: uploadCanFrame
+      role: "串口帧 → MQTT 上传（时间戳转为墙钟模式）"
+    - name: writeSerialAtWire
+      role: "AT 线格式字节写入串口"
+  key_constants:
+    - name: kTzBitsDevBoardUptime
+      value: "0x1F (decimal 31)"
+      description: "高 5 位全 1：标记上电时间模式"
+    - name: kCanFrameRingCapacity
+      value: 2048
+      description: "CAN 帧环形缓冲区容量"
+
+# ============================================================================
+# 十一、与 CAN 协议文档的关系
+# ============================================================================
+relation_to_can_protocol:
+  description: >
+    AT 数据包是 CAN 帧的"传输容器"。CAN 帧本身的结构（29-bit ID 拆分、
+    8 字节 payload 中 element 的 byte/bit 布局、物理值计算、枚举匹配等）
+    由以下独立文档定义，不在本文件范围内：
+  related_docs:
+    - file: 10_can_protocol_intro.yaml
+      role: "CAN 协议解析规则与 YAML 文件联动方式"
+    - file: 11_can_protocol_enums.yaml
+      role: "CAN 帧 element 的枚举值定义"
+    - file: 12_can_protocol_frames_15xx.yaml
+      role: "PGN 0x15xx 系列 CAN 帧定义"
+    - file: 12_can_protocol_frames_17xx.yaml
+      role: "PGN 0x17xx 系列 CAN 帧定义"
+    - file: 12_can_protocol_frames_18xx.yaml
+      role: "PGN 0x18xx 系列 CAN 帧定义"
+    - file: 12_can_protocol_frames_other.yaml
+      role: "其他 PGN CAN 帧定义"
+    - file: 12_can_protocol_frames_index.yaml
+      role: "CAN 帧索引总览"
