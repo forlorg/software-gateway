@@ -88,12 +88,15 @@ namespace gateway::network_task {
                     last_diag_ms = millis();
                     const UBaseType_t stack_free = uxTaskGetStackHighWaterMark(nullptr);
                     Serial.printf(
-                        "[%s] diag: wifi_sta=%d mqtt=%d time_sync=%d "
-                        "stack_free=%lu heap_free=%lu heap_min=%lu\r\n",
+                        "[%s] diag: wifi_sta=%d mqtt=%d ntp=%d tz_ready=%d "
+                        "tz_offset=%d tz_bits=%u stack_free=%lu heap_free=%lu heap_min=%lu\r\n",
                         kLogTag,
                         static_cast<int>(wifi_manager::sta_is_linked()),
                         static_cast<int>(mqtt_manager::is_connected()),
                         static_cast<int>(gateway::time_sync::ntp_has_sync()),
+                        static_cast<int>(gateway::time_sync::timezone_is_ready()),
+                        gateway::time_sync::timezone_offset_hours(),
+                        static_cast<unsigned>(gateway::time_sync::timezone_bits()),
                         static_cast<unsigned long>(stack_free),
                         static_cast<unsigned long>(ESP.getFreeHeap()),
                         static_cast<unsigned long>(ESP.getMinFreeHeap()));

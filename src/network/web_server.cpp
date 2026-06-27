@@ -33,7 +33,7 @@ namespace gateway::web_server {
 
         WebServer g_http(kHttpListenPort);
 
-        char g_live_state_json[2048]{};
+        char g_live_state_json[2560]{};
 
         void write_common_status(JsonDocument &doc) {
             const unsigned long ms = static_cast<unsigned long>(millis());
@@ -44,6 +44,11 @@ namespace gateway::web_server {
             gateway::time_sync::format_wall_time_iso8601(wall_buf, sizeof(wall_buf));
             doc["wall_time"] = wall_buf;
             doc["ntp_synced"] = gateway::time_sync::ntp_has_sync();
+            doc["timezone_ready"] = gateway::time_sync::timezone_is_ready();
+            doc["timezone_offset_hours"] = gateway::time_sync::timezone_offset_hours();
+            doc["timezone_bits"] = gateway::time_sync::timezone_bits();
+            doc["timezone_source"] = gateway::time_sync::timezone_source();
+            doc["timestamp_wall_ready"] = gateway::time_sync::can_use_wall_timestamp_for_upload();
             doc["system_state"] = gateway::state_machine::system_state_str(gateway::state_machine::current());
         }
 

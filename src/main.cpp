@@ -16,6 +16,7 @@
 #include "task/ota_task.h"
 #include "task/status_led_task.h"
 #include "task/uart2_test_task.h"
+#include "task/usb_at_downlink_task.h"
 #include "transport/at_frame_dispatcher.h"
 
 /** UART0 调试日志：与 `variants/esp32s3/pins_arduino.h` 一致（RX=44, TX=43），经板载 USB-UART 桥。 */
@@ -55,6 +56,7 @@ void setup() {
     // gateway::uart2_test_task::start();
 
     gateway::can_driver::start();
+    gateway::usb_at_downlink_task::start();
     gateway::adc_pressure_can_task::start();
 
     gateway::ota_task::start();
